@@ -29,7 +29,7 @@ export function DataPanel({ points, selectedId, onSelect, onDelete, onClear, exp
           <div className="record-empty">暂无记录<br /><span>使用下方采集工具添加第一条数据</span></div>
         ) : points.map((point, index) => (
           <article key={point.id} className={selectedId === point.id ? 'selected' : ''} onClick={() => onSelect(point.id)}>
-            <div className="record-index"><span>#{String(index + 1).padStart(3, '0')}</span><em>{point.source}{point.confidence != null ? ` · ${Math.round(point.confidence)}%` : ''}{point.corrected ? ' · 时间已修正' : ''}{point.speedCorrected ? ` · ${point.speedCorrectionReason ?? '速度已修正'}` : ''}</em></div>
+            <div className="record-index"><span>#{String(index + 1).padStart(3, '0')}</span><em>{point.source}{point.locked || point.source === '手动' ? ' · 已锁定' : ''}{point.confidence != null ? ` · ${Math.round(point.confidence)}%` : ''}{point.corrected ? ' · 时间已修正' : ''}{point.speedCorrected ? ` · ${point.speedCorrectionReason ?? '速度已修正'}` : ''}</em></div>
             <div className="record-values"><strong title={point.speedCorrected ? `OCR 原始速度：${point.rawSpeed} km/h` : undefined}>{point.speed}<small> km/h</small></strong><time>{point.gameTime}</time></div>
             <button className="record-edit" aria-label="选择并编辑"><Pencil size={14} /></button>
             <button className="record-delete" aria-label="删除记录" onClick={(event) => { event.stopPropagation(); onDelete(point.id) }}><Trash2 size={14} /></button>

@@ -9,6 +9,7 @@ function rows(points: TelemetryPoint[]) {
     OCR原始速度_kmh: point.rawSpeed ?? '',
     视频位置秒: Number(point.videoTime.toFixed(3)),
     采集方式: point.source,
+    手动真值锁定: point.locked || point.source === '手动' ? '是' : '否',
     OCR置信度: point.confidence == null ? '' : Number(point.confidence.toFixed(1)),
     OCR原始时间: point.rawGameTime ?? '',
     时间已修正: point.corrected ? '是' : '否',
@@ -29,7 +30,7 @@ export async function exportXlsx(points: TelemetryPoint[], fileName: string) {
   const XLSX = await import('xlsx')
   const workbook = XLSX.utils.book_new()
   const sheet = XLSX.utils.json_to_sheet(rows(points))
-  sheet['!cols'] = [{ wch: 8 }, { wch: 16 }, { wch: 14 }, { wch: 13 }, { wch: 18 }, { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 16 }]
+  sheet['!cols'] = [{ wch: 8 }, { wch: 16 }, { wch: 14 }, { wch: 13 }, { wch: 18 }, { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 16 }]
   XLSX.utils.book_append_sheet(workbook, sheet, '速度数据')
   const summary = XLSX.utils.aoa_to_sheet([
     ['指标', '值'],

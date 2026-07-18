@@ -14,6 +14,8 @@ export interface TelemetryPoint {
   speed: number
   videoTime: number
   source: '手动' | 'OCR' | '模型+OCR'
+  /** 手动确认的真值。自动识别、时间修复和异常速度修复都不得覆盖。 */
+  locked?: boolean
   confidence?: number
   rawGameTime?: string
   corrected?: boolean

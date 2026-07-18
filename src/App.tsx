@@ -124,7 +124,7 @@ export default function App() {
     const existing = selectedId
     const next: TelemetryPoint = {
       id: existing ?? crypto.randomUUID(), gameTime: normalizeGameTime(timeSeconds), timeSeconds, speed: speedNumber,
-      videoTime: workspaceRef.current?.video?.currentTime ?? 0, source: '手动',
+      videoTime: workspaceRef.current?.video?.currentTime ?? 0, source: '手动', locked: true,
     }
     setPoints((current) => enforceMonotonic(existing ? current.map((item) => item.id === existing ? next : item) : [...current, next]))
     setSelectedId(null)
@@ -133,21 +133,21 @@ export default function App() {
     setProgress(existing ? '记录已修正，并重新检查了时间连续性' : '已添加一条数据')
   }
 
-  const recognizeRawFrame = async () => {
+  const recognizeRawFrame = async (thorough = true) => {
     const video = workspaceRef.current?.video
     if (!video || video.readyState < 2) return null
     let speedResult: OcrResult
     try {
       speedResult = await recognizeSpeedDigits(video, regions.speed)
     } catch {
-      speedResult = await recognizeDigits(captureRegion(video, regions.speed), 'speed')
+      speedResult = await recognizeDigits(captureRegion(video, regions.speed), 'speed', thorough)
     }
     if (!speedResult.value || speedResult.confidence < 55) {
-      const fallback = await recognizeDigits(captureRegion(video, regions.speed), 'speed')
+      const fallback = await recognizeDigits(captureRegion(video, regions.speed), 'speed', thorough)
       if (!speedResult.value || (fallback.value && fallback.confidence > speedResult.confidence)) speedResult = fallback
     }
     if (stopRef.current) throw new DOMException('分析已停止', 'AbortError')
-    const timerResult = await recognizeDigits(captureRegion(video, regions.timer), 'timer')
+    const timerResult = await recognizeDigits(captureRegion(video, regions.timer), 'timer', thorough)
     return { videoTime: video.currentTime, speedResult, timerResult }
   }
 
@@ -212,6 +212,7 @@ export default function App() {
     let previousSignature: Uint8Array | null = null
     let repeatedFrames = 0
     let activeFps = frameRate || 60
+    const mobileMode = isMobileBrowser()
     try {
       const fps = frameRate || await detectFrameRate(video)
       activeFps = fps
@@ -230,11 +231,13 @@ export default function App() {
           repeatedFrames += 1
           previousSignature = signature
           setProgress(`分析 ${sample + 1} / ${total} · 第 ${frame} 帧 · 检测到卡顿重复画面，已跳过`)
+          await yieldToBrowser()
           continue
         }
         previousSignature = signature
-        setProgress(`分析 ${sample + 1} / ${total} · 第 ${frame} 帧 · ${target.toFixed(3)}s`)
-        const result = await recognizeRawFrame()
+        setProgress(`分析 ${sample + 1} / ${total} · 第 ${frame} 帧 · ${target.toFixed(3)}s${mobileMode ? ' · 移动端轻量识别' : ''}`)
+        await yieldToBrowser()
+        const result = await recognizeRawFrame(!mobileMode)
         if (stopRef.current) break
         if (!result?.speedResult.value) continue
         const rawTime = result.timerResult.value ?? ''
@@ -284,9 +287,13 @@ export default function App() {
     }, 180)
   }
   const handleVideoPlayable = () => {
-    setVideoUsable(true)
-    setVideoProcessing('')
-    setProgress('视频已成功解码，可以播放、逐帧检查和开始分析')
+    setVideoUsable((wasUsable) => {
+      if (!wasUsable) {
+        setVideoProcessing('')
+        setProgress('视频已成功解码，可以播放、逐帧检查和开始分析')
+      }
+      return true
+    })
   }
   const handleVideoError = async (message: string) => {
     setVideoUsable(false)
@@ -326,7 +333,7 @@ export default function App() {
       <header className="topbar">
         <div className="brand"><span><Aperture size={18} /></span><div><strong>A9 / TELEMETRY</strong><small>VIDEO PERFORMANCE LAB</small></div></div>
         <div className="session-title"><i /><span>{page === 'analyzer' ? '本地分析会话' : page === 'compare' ? '多组数据对比' : '操作教学文档'}</span><strong>{page === 'analyzer' ? fileName || '未命名项目' : page === 'compare' ? 'V–T COMPARE' : 'USER GUIDE'}</strong></div>
-        <nav><button className={page === 'analyzer' ? 'active' : ''} disabled={busy} onClick={() => navigate('analyzer')}><Video size={16} />分析台</button><button className={page === 'compare' ? 'active' : ''} disabled={busy} onClick={() => navigate('compare')}><BarChart3 size={16} />数据对比</button><button className={page === 'guide' ? 'active' : ''} disabled={busy} onClick={() => navigate('guide')}><CircleHelp size={16} />使用指南</button><span className="version">BUILD 1.4.0</span></nav>
+        <nav><button className={page === 'analyzer' ? 'active' : ''} disabled={busy} onClick={() => navigate('analyzer')}><Video size={16} />分析台</button><button className={page === 'compare' ? 'active' : ''} disabled={busy} onClick={() => navigate('compare')}><BarChart3 size={16} />数据对比</button><button className={page === 'guide' ? 'active' : ''} disabled={busy} onClick={() => navigate('guide')}><CircleHelp size={16} />使用指南</button><span className="version">BUILD 1.4.1</span></nav>
       </header>
       {page === 'analyzer' ? <main>
         <div className="workspace-column">
@@ -338,7 +345,7 @@ export default function App() {
           <DataPanel points={points} selectedId={selectedId} onSelect={selectPoint} onDelete={(id) => { setPoints((current) => current.filter((item) => item.id !== id)); if (selectedId === id) setSelectedId(null) }} onClear={() => { setPoints([]); setSelectedId(null) }} exportName={exportName} onExportName={setExportName} onExportCsv={() => void exportCsv(points, exportName || baseName)} onExportXlsx={() => void exportXlsx(points, exportName || baseName)} />
         </div>
       </main> : page === 'compare' ? <ComparisonPage /> : <GuidePage />}
-      <footer><span><i />系统就绪</span><span><Cpu size={13} />浏览器本地计算</span><span><Database size={13} />数据不会上传服务器</span>{page === 'analyzer' && <button onClick={() => setRegions(DEFAULT_REGIONS)}><RotateCcw size={13} />重置框选</button>}<a href="https://github.com/" target="_blank" rel="noreferrer"><GitBranch size={13} />项目源码</a></footer>
+      <footer><span><i />系统就绪</span><span><Cpu size={13} />浏览器本地计算</span><span><Database size={13} />数据不会上传服务器</span>{page === 'analyzer' && <button onClick={() => setRegions(DEFAULT_REGIONS)}><RotateCcw size={13} />重置框选</button>}<a href="https://github.com/REALXD233/a9-telemetry-lab" target="_blank" rel="noreferrer"><GitBranch size={13} />项目源码</a></footer>
     </div>
   )
 }
@@ -350,49 +357,94 @@ function pageFromHash(): 'analyzer' | 'compare' | 'guide' {
 }
 
 async function detectFrameRate(video: HTMLVideoElement) {
-  if (!('requestVideoFrameCallback' in video)) return 60
+  const fallback = 60
+  if (typeof video.requestVideoFrameCallback !== 'function') return fallback
   const originalTime = video.currentTime
   const wasPaused = video.paused
   const times: number[] = []
   video.muted = true
   return new Promise<number>((resolve) => {
+    let settled = false
+    let callbackId: number | null = null
+    let timeout = 0
     const finish = () => {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timeout)
+      if (callbackId != null && typeof video.cancelVideoFrameCallback === 'function') video.cancelVideoFrameCallback(callbackId)
       video.pause()
       video.currentTime = originalTime
       const diffs = times.slice(1).map((time, index) => time - times[index]).filter((diff) => diff > .001)
       diffs.sort((a, b) => a - b)
-      const median = diffs[Math.floor(diffs.length / 2)] || 1 / 60
+      const median = diffs[Math.floor(diffs.length / 2)]
       if (!wasPaused) void video.play()
-      resolve(Math.min(240, Math.max(1, 1 / median)))
+      resolve(median ? Math.min(240, Math.max(1, 1 / median)) : fallback)
     }
     const sample = (_now: DOMHighResTimeStamp, metadata: VideoFrameCallbackMetadata) => {
+      if (settled) return
       times.push(metadata.mediaTime)
       if (times.length >= 12 || video.ended) finish()
-      else video.requestVideoFrameCallback(sample)
+      else callbackId = video.requestVideoFrameCallback(sample)
     }
-    video.requestVideoFrameCallback(sample)
-    void video.play().catch(() => resolve(60))
+    callbackId = video.requestVideoFrameCallback(sample)
+    timeout = window.setTimeout(finish, 2200)
+    void video.play().catch(finish)
   })
 }
 
-function seekVideo(video: HTMLVideoElement, time: number, cancelled: () => boolean = () => false) {
-  if (Math.abs(video.currentTime - time) < .0005) return Promise.resolve()
-  return new Promise<void>((resolve, reject) => {
+async function seekVideo(video: HTMLVideoElement, time: number, cancelled: () => boolean = () => false) {
+  const target = Math.max(0, Math.min(time, Math.max(0, video.duration - .001)))
+  if (Math.abs(video.currentTime - target) >= .0005) await new Promise<void>((resolve, reject) => {
     const cleanup = () => {
-      video.removeEventListener('seeked', done)
+      video.removeEventListener('seeked', check)
+      video.removeEventListener('timeupdate', check)
+      video.removeEventListener('loadeddata', check)
       window.clearInterval(cancelTimer)
       window.clearTimeout(timeout)
     }
     const done = () => { cleanup(); resolve() }
+    const check = () => {
+      if (cancelled()) return done()
+      if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && Math.abs(video.currentTime - target) <= .025) done()
+    }
     const cancelTimer = window.setInterval(() => {
-      if (cancelled()) done()
-    }, 40)
+      check()
+    }, 50)
     const timeout = window.setTimeout(() => {
       cleanup()
       reject(new Error('视频跳帧超时；请确认视频可以正常播放'))
-    }, 4000)
-    video.addEventListener('seeked', done)
-    video.currentTime = time
+    }, 8000)
+    video.addEventListener('seeked', check)
+    video.addEventListener('timeupdate', check)
+    video.addEventListener('loadeddata', check)
+    try {
+      video.currentTime = target
+      check()
+    } catch (error) {
+      cleanup()
+      reject(error)
+    }
+  })
+  if (!cancelled()) await waitForDecodedFrame(video)
+}
+
+function waitForDecodedFrame(video: HTMLVideoElement) {
+  return new Promise<void>((resolve) => {
+    let settled = false
+    let callbackId: number | null = null
+    const done = () => {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timeout)
+      if (callbackId != null && typeof video.cancelVideoFrameCallback === 'function') video.cancelVideoFrameCallback(callbackId)
+      resolve()
+    }
+    const timeout = window.setTimeout(done, 700)
+    if (typeof video.requestVideoFrameCallback === 'function') {
+      callbackId = video.requestVideoFrameCallback(() => done())
+    } else {
+      requestAnimationFrame(() => requestAnimationFrame(done))
+    }
   })
 }
 
@@ -402,6 +454,24 @@ function enforceMonotonic(points: TelemetryPoint[]) {
     const previous = sorted[index - 1]
     const current = sorted[index]
     if (current.timeSeconds <= previous.timeSeconds) {
+      if (isLockedPoint(current)) {
+        let leftIndex = index - 1
+        while (leftIndex >= 0 && !isLockedPoint(sorted[leftIndex])) leftIndex -= 1
+        const leftAnchor = leftIndex >= 0 ? sorted[leftIndex] : null
+        if (!leftAnchor || current.timeSeconds > leftAnchor.timeSeconds) {
+          for (let repairIndex = leftIndex + 1; repairIndex < index; repairIndex += 1) {
+            const point = sorted[repairIndex]
+            const expected = leftAnchor && current.videoTime > leftAnchor.videoTime
+              ? leftAnchor.timeSeconds + (current.timeSeconds - leftAnchor.timeSeconds) * ((point.videoTime - leftAnchor.videoTime) / (current.videoTime - leftAnchor.videoTime))
+              : current.timeSeconds - (current.videoTime - point.videoTime)
+            point.rawGameTime ??= point.gameTime
+            point.timeSeconds = expected
+            point.gameTime = normalizeGameTime(expected)
+            point.corrected = true
+          }
+        }
+        continue
+      }
       current.rawGameTime ??= current.gameTime
       current.timeSeconds = previous.timeSeconds + Math.max(.001, current.videoTime - previous.videoTime)
       current.gameTime = normalizeGameTime(current.timeSeconds)
@@ -413,7 +483,11 @@ function enforceMonotonic(points: TelemetryPoint[]) {
 
 function dedupe(points: TelemetryPoint[]) {
   const seen = new Map<string, TelemetryPoint>()
-  points.forEach((point) => seen.set(point.videoTime.toFixed(4), point))
+  points.forEach((point) => {
+    const key = point.videoTime.toFixed(4)
+    const existing = seen.get(key)
+    if (!existing || isLockedPoint(point) || !isLockedPoint(existing)) seen.set(key, point)
+  })
   return [...seen.values()]
 }
 
@@ -426,6 +500,7 @@ function correctSpeedOutliers(points: TelemetryPoint[]) {
   // 只有前后样本形成稳定趋势，并且 9→5 候选显著更贴近插值时才替换。
   for (let index = 1; index < result.length - 1; index += 1) {
     const current = result[index]
+    if (isLockedPoint(current)) continue
     if (!String(current.speed).includes('9')) continue
     const left = result[index - 1]
     const right = result[index + 1]
@@ -452,6 +527,7 @@ function correctSpeedOutliers(points: TelemetryPoint[]) {
   if (result.length < 5) return { points: result, count }
   const flagged = new Set<number>()
   for (let index = 2; index < result.length - 2; index += 1) {
+    if (isLockedPoint(result[index])) continue
     const window = result.slice(index - 2, index + 3).map((point) => point.speed).sort((a, b) => a - b)
     const median = window[2]
     const threshold = Math.max(22, median * .18)
@@ -460,6 +536,7 @@ function correctSpeedOutliers(points: TelemetryPoint[]) {
     if (leftFar && rightFar && Math.abs(result[index].speed - median) > threshold) flagged.add(index)
   }
   for (const index of flagged) {
+    if (isLockedPoint(result[index])) continue
     let left = index - 1
     let right = index + 1
     while (left >= 0 && flagged.has(left)) left -= 1
@@ -487,6 +564,21 @@ function fiveNineAlternatives(speed: number) {
   }
   variants.delete(source)
   return [...variants].map(Number).filter((value) => Number.isFinite(value) && value >= 0 && value <= 600)
+}
+
+function isLockedPoint(point: TelemetryPoint) {
+  return point.locked === true || point.source === '手动'
+}
+
+function isMobileBrowser() {
+  const navigatorWithHints = navigator as Navigator & { userAgentData?: { mobile?: boolean } }
+  if (navigatorWithHints.userAgentData?.mobile != null) return navigatorWithHints.userAgentData.mobile
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+    || (/Macintosh/i.test(navigator.userAgent) && navigator.maxTouchPoints > 1)
+}
+
+function yieldToBrowser() {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, 0))
 }
 
 function makeCandidates(kind: RegionKind, current: CropRegion): CropRegion[] {

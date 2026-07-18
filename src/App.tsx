@@ -133,21 +133,21 @@ export default function App() {
     setProgress(existing ? '记录已修正，并重新检查了时间连续性' : '已添加一条数据')
   }
 
-  const recognizeRawFrame = async (thorough = true) => {
+  const recognizeRawFrame = async (speedThorough = true, timerThorough = true) => {
     const video = workspaceRef.current?.video
     if (!video || video.readyState < 2) return null
     let speedResult: OcrResult
     try {
       speedResult = await recognizeSpeedDigits(video, regions.speed)
     } catch {
-      speedResult = await recognizeDigits(captureRegion(video, regions.speed), 'speed', thorough)
+      speedResult = await recognizeDigits(captureRegion(video, regions.speed), 'speed', speedThorough)
     }
     if (!speedResult.value || speedResult.confidence < 55) {
-      const fallback = await recognizeDigits(captureRegion(video, regions.speed), 'speed', thorough)
+      const fallback = await recognizeDigits(captureRegion(video, regions.speed), 'speed', speedThorough)
       if (!speedResult.value || (fallback.value && fallback.confidence > speedResult.confidence)) speedResult = fallback
     }
     if (stopRef.current) throw new DOMException('分析已停止', 'AbortError')
-    const timerResult = await recognizeDigits(captureRegion(video, regions.timer), 'timer', thorough)
+    const timerResult = await recognizeDigits(captureRegion(video, regions.timer), 'timer', timerThorough)
     return { videoTime: video.currentTime, speedResult, timerResult }
   }
 
@@ -235,9 +235,9 @@ export default function App() {
           continue
         }
         previousSignature = signature
-        setProgress(`分析 ${sample + 1} / ${total} · 第 ${frame} 帧 · ${target.toFixed(3)}s${mobileMode ? ' · 移动端轻量识别' : ''}`)
+        setProgress(`分析 ${sample + 1} / ${total} · 第 ${frame} 帧 · ${target.toFixed(3)}s${mobileMode ? ' · 速度轻量 / 计时高精度' : ''}`)
         await yieldToBrowser()
-        const result = await recognizeRawFrame(!mobileMode)
+        const result = await recognizeRawFrame(!mobileMode, true)
         if (stopRef.current) break
         if (!result?.speedResult.value) continue
         const rawTime = result.timerResult.value ?? ''
@@ -246,6 +246,7 @@ export default function App() {
           speed: Number(result.speedResult.value), videoTime: target,
           source: result.speedResult.engine === 'speed-model' ? '模型+OCR' : 'OCR',
           confidence: (result.speedResult.confidence + result.timerResult.confidence) / 2,
+          timerConfidence: result.timerResult.confidence,
           rawGameTime: rawTime,
           parsedTime,
         })
@@ -333,7 +334,7 @@ export default function App() {
       <header className="topbar">
         <div className="brand"><span><Aperture size={18} /></span><div><strong>A9 / TELEMETRY</strong><small>VIDEO PERFORMANCE LAB</small></div></div>
         <div className="session-title"><i /><span>{page === 'analyzer' ? '本地分析会话' : page === 'compare' ? '多组数据对比' : '操作教学文档'}</span><strong>{page === 'analyzer' ? fileName || '未命名项目' : page === 'compare' ? 'V–T COMPARE' : 'USER GUIDE'}</strong></div>
-        <nav><button className={page === 'analyzer' ? 'active' : ''} disabled={busy} onClick={() => navigate('analyzer')}><Video size={16} />分析台</button><button className={page === 'compare' ? 'active' : ''} disabled={busy} onClick={() => navigate('compare')}><BarChart3 size={16} />数据对比</button><button className={page === 'guide' ? 'active' : ''} disabled={busy} onClick={() => navigate('guide')}><CircleHelp size={16} />使用指南</button><span className="version">BUILD 1.4.1</span></nav>
+        <nav><button className={page === 'analyzer' ? 'active' : ''} disabled={busy} onClick={() => navigate('analyzer')}><Video size={16} />分析台</button><button className={page === 'compare' ? 'active' : ''} disabled={busy} onClick={() => navigate('compare')}><BarChart3 size={16} />数据对比</button><button className={page === 'guide' ? 'active' : ''} disabled={busy} onClick={() => navigate('guide')}><CircleHelp size={16} />使用指南</button><span className="version">BUILD 1.5.0</span></nav>
       </header>
       {page === 'analyzer' ? <main>
         <div className="workspace-column">

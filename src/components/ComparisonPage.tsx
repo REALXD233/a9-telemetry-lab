@@ -1,7 +1,8 @@
 import { useMemo, useRef, useState } from 'react'
-import { BarChart3, Eye, EyeOff, FileImage, FileSpreadsheet, ImageDown, Maximize2, RotateCcw, Trash2, Upload, X } from 'lucide-react'
+import { BarChart3, Eye, EyeOff, FileImage, FileSpreadsheet, Film, ImageDown, LoaderCircle, Maximize2, RotateCcw, Trash2, Upload, X } from 'lucide-react'
 import { parseGameTime } from '../lib/time'
 import { exportChartImage } from '../lib/chartExport'
+import { exportComparisonVideo, type ChartVideoProgress } from '../lib/chartVideoExport'
 import { ChartModal } from './ChartModal'
 import { SvgPointTooltip } from './SvgPointTooltip'
 
@@ -29,6 +30,8 @@ export function ComparisonPage() {
   const [timeMode, setTimeMode] = useState<TimeMode>('absolute')
   const [showPoints, setShowPoints] = useState(true)
   const [imageName, setImageName] = useState('A9_VT_对比图')
+  const [videoRate, setVideoRate] = useState(1)
+  const [videoProgress, setVideoProgress] = useState<ChartVideoProgress | null>(null)
 
   const importFiles = async (files: FileList | File[]) => {
     const XLSX = await import('xlsx')
@@ -74,6 +77,10 @@ export function ComparisonPage() {
       .map((point) => ({ ...point, originalTime: point.time, displayTime: timeMode === 'aligned' ? point.time - item.rangeStart : point.time })),
   })).filter((item) => item.points.length), [series, timeMode])
   const chart = useMemo(() => <ComparisonChart series={chartSeries} timeMode={timeMode} showPoints={showPoints} />, [chartSeries, timeMode, showPoints])
+  const videoSpan = useMemo(() => {
+    const times = chartSeries.flatMap((item) => item.points.map((point) => point.displayTime))
+    return times.length ? Math.max(...times) - Math.min(...times) : 0
+  }, [chartSeries])
 
   const exportImage = async (format: 'png' | 'svg') => {
     const svg = chartRef.current?.querySelector('svg')
@@ -83,6 +90,30 @@ export function ComparisonPage() {
       setMessage(`V–T 对比图已导出为 ${format.toUpperCase()}。`)
     } catch (error) {
       setMessage(`图片导出失败：${error instanceof Error ? error.message : '未知错误'}`)
+    }
+  }
+
+  const exportVideo = async () => {
+    if (!chartSeries.length || videoProgress) return
+    setVideoProgress({ stage: 'recording', ratio: 0 })
+    setMessage('正在生成动态 V–T 视频；请保持页面位于前台。')
+    try {
+      const result = await exportComparisonVideo(chartSeries.map((item) => ({
+        name: item.name,
+        color: item.color,
+        points: item.points.map((point) => ({ time: point.displayTime, speed: point.speed })),
+      })), {
+        fileName: imageName.replace(/对比图$/, '动态图'),
+        playbackRate: videoRate,
+        timeLabel: timeMode === 'aligned' ? '相对片段时间（秒）' : '局内时间（秒）',
+      }, setVideoProgress)
+      setMessage(result.format === 'mp4'
+        ? `动态 V–T 视频已导出为 MP4，时长约 ${result.duration.toFixed(1)} 秒。`
+        : `MP4 转换失败，已导出兼容的 WebM 视频：${result.warning}`)
+    } catch (error) {
+      setMessage(`视频导出失败：${error instanceof Error ? error.message : '未知错误'}`)
+    } finally {
+      setVideoProgress(null)
     }
   }
 
@@ -130,7 +161,14 @@ export function ComparisonPage() {
         </aside>
         <section className="panel compare-chart-panel">
           <header className="panel-header"><div><span className="eyebrow">COMPARISON CURVE</span><strong>V–T 对比图</strong></div><div className="compare-chart-actions"><button className="maximize-action" disabled={!chartSeries.length} onClick={() => setShowPoints((value) => !value)}>{showPoints ? <Eye size={15} /> : <EyeOff size={15} />}{showPoints ? '隐藏点' : '显示点'}</button><button className="maximize-action" disabled={!chartSeries.length} onClick={() => setExpanded(true)}><Maximize2 size={16} />放大</button></div></header>
-          <div className="compare-export-bar"><label><span>图片名称</span><input value={imageName} onChange={(event) => setImageName(event.target.value)} /></label><button disabled={!chartSeries.length} onClick={() => void exportImage('png')}><ImageDown size={14} />导出 PNG</button><button disabled={!chartSeries.length} onClick={() => void exportImage('svg')}><FileImage size={14} />导出 SVG</button></div>
+          <div className="compare-export-bar"><label><span>导出名称</span><input value={imageName} onChange={(event) => setImageName(event.target.value)} /></label><button disabled={!chartSeries.length || Boolean(videoProgress)} onClick={() => void exportImage('png')}><ImageDown size={14} />导出 PNG</button><button disabled={!chartSeries.length || Boolean(videoProgress)} onClick={() => void exportImage('svg')}><FileImage size={14} />导出 SVG</button></div>
+          <div className="compare-video-export">
+            <div><Film size={16} /><span><strong>动态 V–T 视频</strong><small>曲线逐步显现，当前节点与速度实时高亮</small></span></div>
+            <label>播放倍率<select value={videoRate} disabled={Boolean(videoProgress)} onChange={(event) => setVideoRate(Number(event.target.value))}><option value="0.5">0.5×</option><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option></select></label>
+            <span className="video-estimate">预计成片 {chartSeries.length ? (videoSpan / videoRate + 1.3).toFixed(1) : '—'} 秒</span>
+            <button disabled={!chartSeries.length || Boolean(videoProgress)} onClick={() => void exportVideo()}>{videoProgress ? <LoaderCircle className="spin" size={15} /> : <Film size={15} />}{videoProgress ? (videoProgress.stage === 'recording' ? `录制 ${Math.round(videoProgress.ratio * 100)}%` : `编码 ${Math.round(videoProgress.ratio * 100)}%`) : '导出 MP4'}</button>
+            {videoProgress && <i style={{ width: `${Math.round(videoProgress.ratio * 100)}%` }} />}
+          </div>
           <div ref={chartRef} className="compare-chart-wrap">{chart}</div>
         </section>
       </section>

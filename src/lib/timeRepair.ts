@@ -6,6 +6,7 @@ export interface RawTelemetryCapture {
   speed: number
   source: TelemetryPoint['source']
   confidence: number
+  timerConfidence: number
   rawGameTime: string
   parsedTime: number | null
 }
@@ -16,20 +17,24 @@ export function repairCapturedTimes(rawPoints: RawTelemetryCapture[], references
     .sort((a, b) => a.videoTime - b.videoTime)
   const referenceOffsets = (manualAnchors.length ? manualAnchors : references
     .filter((point) => !point.corrected && Number.isFinite(point.timeSeconds)))
-    .map((point) => point.timeSeconds - point.videoTime)
+    .map((point) => ({ value: point.timeSeconds - point.videoTime, weight: isLocked(point) ? 20 : 3 }))
   const observedOffsets = rawPoints
     .filter((point): point is RawTelemetryCapture & { parsedTime: number } => point.parsedTime != null)
-    .map((point) => point.parsedTime - point.videoTime)
-  const offsets = [...referenceOffsets, ...observedOffsets]
-  if (!offsets.length) return { points: [] as TelemetryPoint[], correctedCount: 0, tolerance: 0 }
+    .map((point) => ({
+      value: point.parsedTime - point.videoTime,
+      weight: Math.max(.12, Math.min(1, point.timerConfidence / 100)) ** 2,
+    }))
+  const offsetSamples = [...referenceOffsets, ...observedOffsets]
+  if (!offsetSamples.length) return { points: [] as TelemetryPoint[], correctedCount: 0, tolerance: 0 }
 
-  const initialCenter = median(offsets)
-  const deviations = offsets.map((offset) => Math.abs(offset - initialCenter))
-  const mad = median(deviations)
-  const baseTolerance = Math.max(.045, 1.75 / Math.max(1, fps))
-  const clusterTolerance = Math.min(.08, Math.max(baseTolerance, mad * 4))
-  const stableOffsets = offsets.filter((offset) => Math.abs(offset - initialCenter) <= clusterTolerance)
-  const stableOffset = median(stableOffsets.length ? stableOffsets : offsets)
+  const baseTolerance = Math.min(.07, Math.max(.04, 2 / Math.max(1, fps)))
+  const clusterRadius = Math.min(.07, Math.max(.05, 2.5 / Math.max(1, fps)))
+  const stableOffset = densestWeightedCenter(offsetSamples, clusterRadius)
+  const stableResiduals = offsetSamples
+    .filter((sample) => Math.abs(sample.value - stableOffset) <= clusterRadius)
+    .map((sample) => Math.abs(sample.value - stableOffset))
+  const mad = median(stableResiduals)
+  const clusterTolerance = Math.min(.07, Math.max(baseTolerance, mad * 3))
   let correctedCount = 0
 
   const points = [...rawPoints]
@@ -56,6 +61,34 @@ export function repairCapturedTimes(rawPoints: RawTelemetryCapture[], references
     .filter((point): point is TelemetryPoint => point != null)
 
   return { points, correctedCount, tolerance: clusterTolerance }
+}
+
+function densestWeightedCenter(samples: { value: number; weight: number }[], radius: number) {
+  let bestCenter = samples[0].value
+  let bestScore = Number.NEGATIVE_INFINITY
+  for (const candidate of samples) {
+    const score = samples.reduce((sum, sample) => {
+      const distance = Math.abs(sample.value - candidate.value)
+      return distance > radius ? sum : sum + sample.weight * (1.2 - distance / radius)
+    }, 0)
+    if (score > bestScore) {
+      bestScore = score
+      bestCenter = candidate.value
+    }
+  }
+  const inliers = samples.filter((sample) => Math.abs(sample.value - bestCenter) <= radius)
+  return weightedMedian(inliers.length ? inliers : samples)
+}
+
+function weightedMedian(samples: { value: number; weight: number }[]) {
+  const sorted = [...samples].sort((a, b) => a.value - b.value)
+  const half = sorted.reduce((sum, sample) => sum + sample.weight, 0) / 2
+  let cumulative = 0
+  for (const sample of sorted) {
+    cumulative += sample.weight
+    if (cumulative >= half) return sample.value
+  }
+  return sorted.at(-1)?.value ?? 0
 }
 
 function isLocked(point: TelemetryPoint) {

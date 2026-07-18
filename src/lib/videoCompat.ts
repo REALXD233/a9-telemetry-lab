@@ -45,3 +45,29 @@ export async function transcodeToBrowserMp4(file: File, onProgress: (progress: n
     await Promise.allSettled([ffmpeg.deleteFile(inputName), ffmpeg.deleteFile(outputName)])
   }
 }
+
+export async function transcodeRecordingToMp4(recording: Blob, onProgress: (progress: number) => void) {
+  if (/mp4/i.test(recording.type)) return recording
+  const [{ fetchFile }, ffmpeg] = await Promise.all([import('@ffmpeg/util'), getFfmpeg()])
+  const token = crypto.randomUUID().replace(/-/g, '')
+  const inputName = `chart-${token}.webm`
+  const outputName = `chart-${token}.mp4`
+  progressListener = onProgress
+  try {
+    await ffmpeg.writeFile(inputName, await fetchFile(recording))
+    const exitCode = await ffmpeg.exec([
+      '-i', inputName,
+      '-an',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '20', '-pix_fmt', 'yuv420p',
+      '-movflags', '+faststart',
+      outputName,
+    ])
+    if (exitCode !== 0) throw new Error(`视频编码器退出代码 ${exitCode}`)
+    const output = await ffmpeg.readFile(outputName)
+    if (typeof output === 'string') throw new Error('视频编码器没有返回有效数据')
+    return new Blob([Uint8Array.from(output)], { type: 'video/mp4' })
+  } finally {
+    progressListener = null
+    await Promise.allSettled([ffmpeg.deleteFile(inputName), ffmpeg.deleteFile(outputName)])
+  }
+}

@@ -1,0 +1,568 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Aperture, BarChart3, CircleHelp, Cpu, Database, GitBranch, RotateCcw, Video } from 'lucide-react'
+import { CapturePanel } from './components/CapturePanel'
+import { DataPanel } from './components/DataPanel'
+import { TelemetryChart } from './components/TelemetryChart'
+import { VideoWorkspace, type VideoWorkspaceHandle } from './components/VideoWorkspace'
+import { ComparisonPage } from './components/ComparisonPage'
+import { GuidePage } from './components/GuidePage'
+import { cancelDigitRecognition, captureFrameSignature, captureRegion, isRepeatedFrame, recognizeDigits, recognizeSpeedDigits } from './lib/capture'
+import { exportCsv, exportXlsx } from './lib/export'
+import { normalizeGameTime, parseGameTime } from './lib/time'
+import { repairCapturedTimes, type RawTelemetryCapture } from './lib/timeRepair'
+import { transcodeToBrowserMp4 } from './lib/videoCompat'
+import type { CropRegion, OcrResult, RegionKind, TelemetryPoint } from './types'
+
+const DEFAULT_REGIONS: Record<RegionKind, CropRegion> = {
+  speed: { x: 0.8477, y: 0.0139, width: 0.1094, height: 0.125 },
+  timer: { x: 0.818, y: 0.154, width: 0.142, height: 0.068 },
+}
+
+export default function App() {
+  const workspaceRef = useRef<VideoWorkspaceHandle>(null)
+  const previewTimerRef = useRef<number | null>(null)
+  const stopRef = useRef(false)
+  const regionsRef = useRef(DEFAULT_REGIONS)
+  const sourceRef = useRef<string | null>(null)
+  const inputFileRef = useRef<File | null>(null)
+  const conversionAttemptRef = useRef(false)
+  const [source, setSource] = useState<string | null>(null)
+  const [fileName, setFileName] = useState('')
+  const [regions, setRegions] = useState(DEFAULT_REGIONS)
+  const [activeRegion, setActiveRegion] = useState<RegionKind>('speed')
+  const [points, setPoints] = useState<TelemetryPoint[]>([])
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [speed, setSpeed] = useState('')
+  const [gameTime, setGameTime] = useState('')
+  const [frameInterval, setFrameInterval] = useState(30)
+  const [frameRate, setFrameRate] = useState(0)
+  const [duration, setDuration] = useState(0)
+  const [scope, setScope] = useState<'full' | 'range'>('full')
+  const [rangeStart, setRangeStart] = useState(0)
+  const [rangeEnd, setRangeEnd] = useState(0)
+  const [previewSpeed, setPreviewSpeed] = useState('')
+  const [previewTimer, setPreviewTimer] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [scanRunning, setScanRunning] = useState(false)
+  const [videoUsable, setVideoUsable] = useState(false)
+  const [progress, setProgress] = useState('')
+  const [videoProcessing, setVideoProcessing] = useState('')
+  const [exportName, setExportName] = useState('A9_速度分析')
+  const [page, setPage] = useState<'analyzer' | 'compare' | 'guide'>(() => pageFromHash())
+  const selected = useMemo(() => points.find((point) => point.id === selectedId) ?? null, [points, selectedId])
+
+  useEffect(() => () => { if (sourceRef.current) URL.revokeObjectURL(sourceRef.current) }, [])
+  useEffect(() => {
+    const syncPage = () => setPage(pageFromHash())
+    window.addEventListener('hashchange', syncPage)
+    return () => window.removeEventListener('hashchange', syncPage)
+  }, [])
+
+  const navigate = (next: 'analyzer' | 'compare' | 'guide') => {
+    window.location.hash = next === 'analyzer' ? '' : next
+    setPage(next)
+  }
+
+  const loadFile = (file: File) => {
+    const nextSource = URL.createObjectURL(file)
+    const previousSource = sourceRef.current
+    sourceRef.current = nextSource
+    inputFileRef.current = file
+    conversionAttemptRef.current = false
+    setSource(nextSource)
+    setFileName(file.name)
+    setExportName(file.name.replace(/\.[^.]+$/, '') || 'A9_速度分析')
+    setPoints([])
+    setSelectedId(null)
+    setFrameRate(0)
+    setVideoUsable(false)
+    setVideoProcessing('')
+    setRangeStart(0)
+    setProgress('视频已载入：先用右侧放大预览校准两个识别框')
+    if (previousSource) URL.revokeObjectURL(previousSource)
+  }
+
+  const refreshPreviews = () => {
+    if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current)
+    previewTimerRef.current = window.setTimeout(() => {
+      const video = workspaceRef.current?.video
+      if (!video || video.readyState < 2) return
+      try {
+        setPreviewSpeed(captureRegion(video, regionsRef.current.speed).toDataURL('image/jpeg', .82))
+        setPreviewTimer(captureRegion(video, regionsRef.current.timer).toDataURL('image/jpeg', .82))
+      } catch { /* 下一次有效帧会重试 */ }
+    }, 90)
+  }
+
+  useEffect(() => {
+    regionsRef.current = regions
+    if (source) refreshPreviews()
+  }, [regions, source])
+
+  const updateRegion = (kind: RegionKind, region: CropRegion) => {
+    setRegions((current) => ({ ...current, [kind]: region }))
+    window.setTimeout(refreshPreviews, 0)
+  }
+
+  const selectPoint = (id: string) => {
+    const point = points.find((item) => item.id === id)
+    if (!point) return
+    setSelectedId(id)
+    setSpeed(String(point.speed))
+    setGameTime(point.gameTime)
+    const video = workspaceRef.current?.video
+    if (video) video.currentTime = point.videoTime
+  }
+
+  const savePoint = () => {
+    const timeSeconds = parseGameTime(gameTime)
+    const speedNumber = Number(speed)
+    if (timeSeconds == null || !Number.isFinite(speedNumber) || speedNumber < 0 || speedNumber > 600) {
+      setProgress('请输入有效速度和局内时间，例如 245 与 01:23.450')
+      return
+    }
+    const existing = selectedId
+    const next: TelemetryPoint = {
+      id: existing ?? crypto.randomUUID(), gameTime: normalizeGameTime(timeSeconds), timeSeconds, speed: speedNumber,
+      videoTime: workspaceRef.current?.video?.currentTime ?? 0, source: '手动',
+    }
+    setPoints((current) => enforceMonotonic(existing ? current.map((item) => item.id === existing ? next : item) : [...current, next]))
+    setSelectedId(null)
+    setSpeed('')
+    setGameTime('')
+    setProgress(existing ? '记录已修正，并重新检查了时间连续性' : '已添加一条数据')
+  }
+
+  const recognizeRawFrame = async () => {
+    const video = workspaceRef.current?.video
+    if (!video || video.readyState < 2) return null
+    let speedResult: OcrResult
+    try {
+      speedResult = await recognizeSpeedDigits(video, regions.speed)
+    } catch {
+      speedResult = await recognizeDigits(captureRegion(video, regions.speed), 'speed')
+    }
+    if (!speedResult.value || speedResult.confidence < 55) {
+      const fallback = await recognizeDigits(captureRegion(video, regions.speed), 'speed')
+      if (!speedResult.value || (fallback.value && fallback.confidence > speedResult.confidence)) speedResult = fallback
+    }
+    if (stopRef.current) throw new DOMException('分析已停止', 'AbortError')
+    const timerResult = await recognizeDigits(captureRegion(video, regions.timer), 'timer')
+    return { videoTime: video.currentTime, speedResult, timerResult }
+  }
+
+  const ocrCurrent = async () => {
+    setBusy(true)
+    setProgress('正在用速度字库模型识别速度，并用 OCR 读取计时器…')
+    try {
+      const result = await recognizeRawFrame()
+      if (!result) return
+      const speedValue = result.speedResult.value ?? ''
+      const timerValue = result.timerResult.value ?? ''
+      setSpeed(speedValue)
+      setGameTime(timerValue)
+      if (!speedValue || parseGameTime(timerValue) == null) {
+        setProgress(`识别不完整：速度“${result.speedResult.raw || '—'}”，时间“${result.timerResult.raw || '—'}”。请检查放大预览。`)
+      } else {
+        const confidence = (result.speedResult.confidence + result.timerResult.confidence) / 2
+        const engine = result.speedResult.engine === 'speed-model' ? '速度模型 + 计时 OCR' : 'OCR 回退'
+        setProgress(`识别完成 · ${engine} · 平均置信度 ${Math.round(confidence)}%，确认后点击“添加手动记录”`)
+      }
+    } catch (error) { setProgress(`OCR 失败：${error instanceof Error ? error.message : '未知错误'}`) }
+    finally { setBusy(false) }
+  }
+
+  const autoLocate = async () => {
+    const video = workspaceRef.current?.video
+    if (!video) return
+    setBusy(true)
+    video.pause()
+    setProgress('正在搜索右上区域中的速度和计时数字…')
+    try {
+      const speedCandidates = makeCandidates('speed', regions.speed)
+      const timerCandidates = makeCandidates('timer', regions.timer)
+      const speedRegion = await bestRegion(video, speedCandidates, 'speed', (index, total) => setProgress(`速度区域颜色筛选完成 · OCR 精查 ${index + 1} / ${total}`))
+      const timerRegion = await bestRegion(video, timerCandidates, 'timer', (index, total) => setProgress(`计时区域颜色筛选完成 · OCR 精查 ${index + 1} / ${total}`))
+      setRegions({ speed: speedRegion ?? regions.speed, timer: timerRegion ?? regions.timer })
+      window.setTimeout(refreshPreviews, 100)
+      setProgress(speedRegion && timerRegion ? '自动定位完成，请在放大预览中确认后再识别' : '仅定位到部分区域，请手动微调未命中的框')
+    } catch (error) { setProgress(`自动定位失败：${error instanceof Error ? error.message : '未知错误'}`) }
+    finally { setBusy(false) }
+  }
+
+  const autoScan = async () => {
+    const video = workspaceRef.current?.video
+    if (!video) return
+    if (scanRunning) {
+      stopRef.current = true
+      video.pause()
+      setProgress('已收到停止请求，正在终止当前 OCR…')
+      void cancelDigitRecognition()
+      return
+    }
+    if (busy || !videoUsable) return
+    setBusy(true)
+    setScanRunning(true)
+    stopRef.current = false
+    video.pause()
+    const originalTime = video.currentTime
+    const start = scope === 'full' ? 0 : Math.max(0, Math.min(rangeStart, video.duration))
+    const end = Math.max(start, Math.min(scope === 'full' ? video.duration - .001 : rangeEnd, video.duration - .001))
+      const captured: RawTelemetryCapture[] = []
+    let previousSignature: Uint8Array | null = null
+    let repeatedFrames = 0
+    let activeFps = frameRate || 60
+    try {
+      const fps = frameRate || await detectFrameRate(video)
+      activeFps = fps
+      setFrameRate(fps)
+      const frameStep = Number.isFinite(frameInterval) ? Math.max(1, Math.round(frameInterval)) : 1
+      const startFrame = Math.ceil(start * fps)
+      const endFrame = Math.floor(end * fps)
+      const total = Math.floor((endFrame - startFrame) / frameStep) + 1
+      for (let sample = 0, frame = startFrame; frame <= endFrame; frame += frameStep, sample += 1) {
+        if (stopRef.current) break
+        const target = Math.min(end, frame / fps)
+        await seekVideo(video, target, () => stopRef.current)
+        if (stopRef.current) break
+        const signature = captureFrameSignature(video)
+        if (isRepeatedFrame(previousSignature, signature)) {
+          repeatedFrames += 1
+          previousSignature = signature
+          setProgress(`分析 ${sample + 1} / ${total} · 第 ${frame} 帧 · 检测到卡顿重复画面，已跳过`)
+          continue
+        }
+        previousSignature = signature
+        setProgress(`分析 ${sample + 1} / ${total} · 第 ${frame} 帧 · ${target.toFixed(3)}s`)
+        const result = await recognizeRawFrame()
+        if (stopRef.current) break
+        if (!result?.speedResult.value) continue
+        const rawTime = result.timerResult.value ?? ''
+        const parsedTime = parseGameTime(rawTime)
+        captured.push({
+          speed: Number(result.speedResult.value), videoTime: target,
+          source: result.speedResult.engine === 'speed-model' ? '模型+OCR' : 'OCR',
+          confidence: (result.speedResult.confidence + result.timerResult.confidence) / 2,
+          rawGameTime: rawTime,
+          parsedTime,
+        })
+      }
+      const repaired = repairCapturedTimes(captured, points, activeFps)
+      const speedCorrection = correctSpeedOutliers(enforceMonotonic(dedupe([...points, ...repaired.points])))
+      setPoints(speedCorrection.points)
+      const stopped = stopRef.current ? '已停止' : '完成'
+      setProgress(`${stopped}：提取 ${repaired.points.length} 条；跳过 ${repeatedFrames} 个卡顿重复帧，修正 ${repaired.correctedCount} 条异常时间、${speedCorrection.count} 条突变速度。`)
+    } catch (error) {
+      if (stopRef.current) {
+        const repaired = repairCapturedTimes(captured, points, activeFps)
+        const speedCorrection = correctSpeedOutliers(enforceMonotonic(dedupe([...points, ...repaired.points])))
+        setPoints(speedCorrection.points)
+        setProgress(`已停止分析，保留已提取的 ${repaired.points.length} 条记录。`)
+      } else {
+        setProgress(`分析中止：${error instanceof Error ? error.message : '未知错误'}`)
+      }
+    } finally {
+      video.currentTime = originalTime
+      setBusy(false)
+      setScanRunning(false)
+      stopRef.current = false
+    }
+  }
+
+  const useCurrentEdge = (edge: 'start' | 'end') => {
+    const value = Number((workspaceRef.current?.video?.currentTime ?? 0).toFixed(3))
+    if (edge === 'start') setRangeStart(value)
+    else setRangeEnd(value)
+  }
+  const handleVideoMetadata = (value: number) => {
+    setDuration(value)
+    setRangeEnd(Number(value.toFixed(3)))
+    window.setTimeout(refreshPreviews, 100)
+    window.setTimeout(() => {
+      const video = workspaceRef.current?.video
+      if (video) void detectFrameRate(video).then((fps) => { setFrameRate(fps); setProgress(`已检测到 ${fps.toFixed(2)} FPS，可使用方向键逐帧检查`) })
+    }, 180)
+  }
+  const handleVideoPlayable = () => {
+    setVideoUsable(true)
+    setVideoProcessing('')
+    setProgress('视频已成功解码，可以播放、逐帧检查和开始分析')
+  }
+  const handleVideoError = async (message: string) => {
+    setVideoUsable(false)
+    const file = inputFileRef.current
+    if (!file || conversionAttemptRef.current || !/\.mp4$/i.test(file.name)) {
+      setProgress(message)
+      return
+    }
+    conversionAttemptRef.current = true
+    setBusy(true)
+    setVideoProcessing('检测到浏览器不支持该 MP4 编码，正在自动转换为 H.264…')
+    setProgress('原始 MP4 无法由浏览器解码，正在本机自动转换；视频越长，所需时间越久。')
+    try {
+      const converted = await transcodeToBrowserMp4(file, (ratio) => {
+        const percent = Math.max(1, Math.min(99, Math.round(ratio * 100)))
+        setVideoProcessing(`正在转换为浏览器兼容视频 · ${percent}%`)
+        setProgress(`MP4 兼容转换 ${percent}% · 全程仅在本机浏览器中处理`)
+      })
+      const nextSource = URL.createObjectURL(converted)
+      const previousSource = sourceRef.current
+      sourceRef.current = nextSource
+      setSource(nextSource)
+      setVideoProcessing('转换完成，正在载入视频…')
+      setProgress('兼容转换完成，正在载入 H.264 视频')
+      if (previousSource) URL.revokeObjectURL(previousSource)
+    } catch (error) {
+      setVideoProcessing('')
+      setProgress(`MP4 自动转换失败：${error instanceof Error ? error.message : '未知错误'}。建议转换为 H.264/YUV420P MP4 后重试。`)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const baseName = fileName.replace(/\.[^.]+$/, '') || 'A9_速度分析'
+
+  return (
+    <div className="app-shell">
+      <header className="topbar">
+        <div className="brand"><span><Aperture size={18} /></span><div><strong>A9 / TELEMETRY</strong><small>VIDEO PERFORMANCE LAB</small></div></div>
+        <div className="session-title"><i /><span>{page === 'analyzer' ? '本地分析会话' : page === 'compare' ? '多组数据对比' : '操作教学文档'}</span><strong>{page === 'analyzer' ? fileName || '未命名项目' : page === 'compare' ? 'V–T COMPARE' : 'USER GUIDE'}</strong></div>
+        <nav><button className={page === 'analyzer' ? 'active' : ''} disabled={busy} onClick={() => navigate('analyzer')}><Video size={16} />分析台</button><button className={page === 'compare' ? 'active' : ''} disabled={busy} onClick={() => navigate('compare')}><BarChart3 size={16} />数据对比</button><button className={page === 'guide' ? 'active' : ''} disabled={busy} onClick={() => navigate('guide')}><CircleHelp size={16} />使用指南</button><span className="version">BUILD 1.4.0</span></nav>
+      </header>
+      {page === 'analyzer' ? <main>
+        <div className="workspace-column">
+          <VideoWorkspace ref={workspaceRef} source={source} fileName={fileName} regions={regions} activeRegion={activeRegion} onActiveRegion={setActiveRegion} onRegionChange={updateRegion} onFile={loadFile} onVideoMetadata={handleVideoMetadata} onVideoPlayable={handleVideoPlayable} onVideoError={handleVideoError} onFrameChange={refreshPreviews} frameRate={frameRate} processingMessage={videoProcessing} />
+          <TelemetryChart points={points} />
+        </div>
+        <div className="control-column">
+          <CapturePanel speed={speed} gameTime={gameTime} frameInterval={frameInterval} frameRate={frameRate} scope={scope} rangeStart={rangeStart} rangeEnd={rangeEnd} duration={duration} previewSpeed={previewSpeed} previewTimer={previewTimer} busy={busy} scanRunning={scanRunning} progress={progress} selected={selected} disabled={!videoUsable} onSpeed={setSpeed} onGameTime={setGameTime} onFrameInterval={setFrameInterval} onScope={setScope} onRangeStart={setRangeStart} onRangeEnd={setRangeEnd} onUseCurrent={useCurrentEdge} onManual={savePoint} onOcrCurrent={ocrCurrent} onAutoLocate={autoLocate} onAutoScan={autoScan} />
+          <DataPanel points={points} selectedId={selectedId} onSelect={selectPoint} onDelete={(id) => { setPoints((current) => current.filter((item) => item.id !== id)); if (selectedId === id) setSelectedId(null) }} onClear={() => { setPoints([]); setSelectedId(null) }} exportName={exportName} onExportName={setExportName} onExportCsv={() => void exportCsv(points, exportName || baseName)} onExportXlsx={() => void exportXlsx(points, exportName || baseName)} />
+        </div>
+      </main> : page === 'compare' ? <ComparisonPage /> : <GuidePage />}
+      <footer><span><i />系统就绪</span><span><Cpu size={13} />浏览器本地计算</span><span><Database size={13} />数据不会上传服务器</span>{page === 'analyzer' && <button onClick={() => setRegions(DEFAULT_REGIONS)}><RotateCcw size={13} />重置框选</button>}<a href="https://github.com/" target="_blank" rel="noreferrer"><GitBranch size={13} />项目源码</a></footer>
+    </div>
+  )
+}
+
+function pageFromHash(): 'analyzer' | 'compare' | 'guide' {
+  if (window.location.hash === '#compare') return 'compare'
+  if (window.location.hash === '#guide') return 'guide'
+  return 'analyzer'
+}
+
+async function detectFrameRate(video: HTMLVideoElement) {
+  if (!('requestVideoFrameCallback' in video)) return 60
+  const originalTime = video.currentTime
+  const wasPaused = video.paused
+  const times: number[] = []
+  video.muted = true
+  return new Promise<number>((resolve) => {
+    const finish = () => {
+      video.pause()
+      video.currentTime = originalTime
+      const diffs = times.slice(1).map((time, index) => time - times[index]).filter((diff) => diff > .001)
+      diffs.sort((a, b) => a - b)
+      const median = diffs[Math.floor(diffs.length / 2)] || 1 / 60
+      if (!wasPaused) void video.play()
+      resolve(Math.min(240, Math.max(1, 1 / median)))
+    }
+    const sample = (_now: DOMHighResTimeStamp, metadata: VideoFrameCallbackMetadata) => {
+      times.push(metadata.mediaTime)
+      if (times.length >= 12 || video.ended) finish()
+      else video.requestVideoFrameCallback(sample)
+    }
+    video.requestVideoFrameCallback(sample)
+    void video.play().catch(() => resolve(60))
+  })
+}
+
+function seekVideo(video: HTMLVideoElement, time: number, cancelled: () => boolean = () => false) {
+  if (Math.abs(video.currentTime - time) < .0005) return Promise.resolve()
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      video.removeEventListener('seeked', done)
+      window.clearInterval(cancelTimer)
+      window.clearTimeout(timeout)
+    }
+    const done = () => { cleanup(); resolve() }
+    const cancelTimer = window.setInterval(() => {
+      if (cancelled()) done()
+    }, 40)
+    const timeout = window.setTimeout(() => {
+      cleanup()
+      reject(new Error('视频跳帧超时；请确认视频可以正常播放'))
+    }, 4000)
+    video.addEventListener('seeked', done)
+    video.currentTime = time
+  })
+}
+
+function enforceMonotonic(points: TelemetryPoint[]) {
+  const sorted = points.map((point) => ({ ...point })).sort((a, b) => a.videoTime - b.videoTime)
+  for (let index = 1; index < sorted.length; index += 1) {
+    const previous = sorted[index - 1]
+    const current = sorted[index]
+    if (current.timeSeconds <= previous.timeSeconds) {
+      current.rawGameTime ??= current.gameTime
+      current.timeSeconds = previous.timeSeconds + Math.max(.001, current.videoTime - previous.videoTime)
+      current.gameTime = normalizeGameTime(current.timeSeconds)
+      current.corrected = true
+    }
+  }
+  return sorted
+}
+
+function dedupe(points: TelemetryPoint[]) {
+  const seen = new Map<string, TelemetryPoint>()
+  points.forEach((point) => seen.set(point.videoTime.toFixed(4), point))
+  return [...seen.values()]
+}
+
+function correctSpeedOutliers(points: TelemetryPoint[]) {
+  if (points.length < 3) return { points, count: 0 }
+  const result = points.map((point) => ({ ...point }))
+  let count = 0
+
+  // Tesseract 对发光 HUD 最常见的局部混淆是把 5 的上半部闭合成 9。
+  // 只有前后样本形成稳定趋势，并且 9→5 候选显著更贴近插值时才替换。
+  for (let index = 1; index < result.length - 1; index += 1) {
+    const current = result[index]
+    if (!String(current.speed).includes('9')) continue
+    const left = result[index - 1]
+    const right = result[index + 1]
+    const span = right.videoTime - left.videoTime
+    const ratio = span > 0 ? (current.videoTime - left.videoTime) / span : .5
+    const expected = left.speed + (right.speed - left.speed) * ratio
+    const neighborSpread = Math.abs(right.speed - left.speed)
+    if (neighborSpread > Math.max(14, expected * .1)) continue
+    const alternatives = fiveNineAlternatives(current.speed)
+    const best = alternatives.sort((a, b) => Math.abs(a - expected) - Math.abs(b - expected))[0]
+    if (best == null) continue
+    const originalDeviation = Math.abs(current.speed - expected)
+    const candidateDeviation = Math.abs(best - expected)
+    const candidateTolerance = Math.max(5, neighborSpread * 1.25 + 1)
+    if (candidateDeviation <= candidateTolerance && originalDeviation - candidateDeviation >= 3) {
+      current.rawSpeed ??= current.speed
+      current.speed = best
+      current.speedCorrected = true
+      current.speedCorrectionReason = '5/9 混淆'
+      count += 1
+    }
+  }
+
+  if (result.length < 5) return { points: result, count }
+  const flagged = new Set<number>()
+  for (let index = 2; index < result.length - 2; index += 1) {
+    const window = result.slice(index - 2, index + 3).map((point) => point.speed).sort((a, b) => a - b)
+    const median = window[2]
+    const threshold = Math.max(22, median * .18)
+    const leftFar = Math.abs(result[index].speed - result[index - 1].speed) > threshold
+    const rightFar = Math.abs(result[index].speed - result[index + 1].speed) > threshold
+    if (leftFar && rightFar && Math.abs(result[index].speed - median) > threshold) flagged.add(index)
+  }
+  for (const index of flagged) {
+    let left = index - 1
+    let right = index + 1
+    while (left >= 0 && flagged.has(left)) left -= 1
+    while (right < result.length && flagged.has(right)) right += 1
+    if (left < 0 || right >= result.length) continue
+    const span = result[right].videoTime - result[left].videoTime
+    const ratio = span > 0 ? (result[index].videoTime - result[left].videoTime) / span : .5
+    const correctedSpeed = Math.round(result[left].speed + (result[right].speed - result[left].speed) * ratio)
+    result[index].rawSpeed ??= result[index].speed
+    result[index].speed = Math.max(0, Math.min(600, correctedSpeed))
+    result[index].speedCorrected = true
+    result[index].speedCorrectionReason = '突变插值'
+    count += 1
+  }
+  return { points: result, count }
+}
+
+function fiveNineAlternatives(speed: number) {
+  const source = String(Math.round(speed))
+  let variants = new Set([source])
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] !== '9') continue
+    const additions = [...variants].map((value) => `${value.slice(0, index)}5${value.slice(index + 1)}`)
+    variants = new Set([...variants, ...additions])
+  }
+  variants.delete(source)
+  return [...variants].map(Number).filter((value) => Number.isFinite(value) && value >= 0 && value <= 600)
+}
+
+function makeCandidates(kind: RegionKind, current: CropRegion): CropRegion[] {
+  const candidates: CropRegion[] = [current]
+  if (kind === 'speed') {
+    for (let x = .72; x <= .89; x += .02) for (let y = 0; y <= .14; y += .02) {
+      for (const width of [.1, .115, .13]) for (const height of [.105, .125, .145]) {
+        if (x + width <= .995 && y + height <= .3) candidates.push({ x, y, width, height })
+      }
+    }
+  } else {
+    for (let x = .48; x <= .86; x += .03) for (let y = 0; y <= .16; y += .02) {
+      for (const width of [.14, .17, .2]) for (const height of [.065, .08, .105]) {
+        if (x + width <= .995 && y + height <= .32) candidates.push({ x, y, width, height })
+      }
+    }
+  }
+  return candidates
+}
+
+async function bestRegion(video: HTMLVideoElement, candidates: CropRegion[], kind: RegionKind, onProgress: (index: number, total: number) => void) {
+  let best: { region: CropRegion; score: number } | null = null
+  const scored = candidates.map((region) => ({ region, visual: regionVisualScore(video, region, kind) }))
+  const current = scored[0]
+  const ranked = [current, ...scored.slice(1).sort((a, b) => b.visual - a.visual)]
+    .filter((candidate, index, all) => all.findIndex((item) => regionKey(item.region) === regionKey(candidate.region)) === index)
+    .slice(0, kind === 'speed' ? 11 : 13)
+  for (let index = 0; index < ranked.length; index += 1) {
+    onProgress(index, ranked.length)
+    const candidate = ranked[index]
+    const result = await recognizeDigits(captureRegion(video, candidate.region), kind, false)
+    const score = result.confidence * .68 + candidate.visual * .32
+    if (result.value && (!best || score > best.score)) best = { region: candidate.region, score }
+  }
+  return best?.region ?? null
+}
+
+function regionKey(region: CropRegion) {
+  return `${region.x.toFixed(4)}:${region.y.toFixed(4)}:${region.width.toFixed(4)}:${region.height.toFixed(4)}`
+}
+
+function regionVisualScore(video: HTMLVideoElement, region: CropRegion, kind: RegionKind) {
+  const canvas = document.createElement('canvas')
+  canvas.width = 64
+  canvas.height = 36
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+  if (!context) return 0
+  context.drawImage(video, region.x * video.videoWidth, region.y * video.videoHeight, region.width * video.videoWidth, region.height * video.videoHeight, 0, 0, canvas.width, canvas.height)
+  const data = context.getImageData(0, 0, canvas.width, canvas.height).data
+  let dark = 0
+  let bright = 0
+  let red = 0
+  let luminanceSum = 0
+  let luminanceSquared = 0
+  const count = canvas.width * canvas.height
+  for (let index = 0; index < data.length; index += 4) {
+    const r = data[index]
+    const g = data[index + 1]
+    const b = data[index + 2]
+    const luminance = .299 * r + .587 * g + .114 * b
+    luminanceSum += luminance
+    luminanceSquared += luminance * luminance
+    if (luminance < 62) dark += 1
+    if (luminance > 178) bright += 1
+    if (r > 78 && r > g * 1.3 && r > b * 1.2) red += 1
+  }
+  const darkRatio = dark / count
+  const brightRatio = bright / count
+  const redRatio = red / count
+  const mean = luminanceSum / count
+  const contrast = Math.min(1, Math.sqrt(Math.max(0, luminanceSquared / count - mean * mean)) / 75)
+  if (kind === 'speed') {
+    const digitBalance = 1 - Math.min(1, Math.abs(brightRatio - .22) / .3)
+    return Math.max(0, Math.min(100, darkRatio * 52 + digitBalance * 25 + contrast * 28 - redRatio * 22))
+  }
+  const redBalance = Math.min(1, redRatio / .34)
+  const digitBalance = 1 - Math.min(1, Math.abs(brightRatio - .17) / .28)
+  return Math.max(0, Math.min(100, redBalance * 58 + digitBalance * 18 + contrast * 24))
+}

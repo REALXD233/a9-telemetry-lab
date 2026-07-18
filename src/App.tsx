@@ -334,7 +334,7 @@ export default function App() {
       <header className="topbar">
         <div className="brand"><span><Aperture size={18} /></span><div><strong>A9 / TELEMETRY</strong><small>VIDEO PERFORMANCE LAB</small></div></div>
         <div className="session-title"><i /><span>{page === 'analyzer' ? '本地分析会话' : page === 'compare' ? '多组数据对比' : '操作教学文档'}</span><strong>{page === 'analyzer' ? fileName || '未命名项目' : page === 'compare' ? 'V–T COMPARE' : 'USER GUIDE'}</strong></div>
-        <nav><button className={page === 'analyzer' ? 'active' : ''} disabled={busy} onClick={() => navigate('analyzer')}><Video size={16} />分析台</button><button className={page === 'compare' ? 'active' : ''} disabled={busy} onClick={() => navigate('compare')}><BarChart3 size={16} />数据对比</button><button className={page === 'guide' ? 'active' : ''} disabled={busy} onClick={() => navigate('guide')}><CircleHelp size={16} />使用指南</button><span className="version">BUILD 1.5.0</span></nav>
+        <nav><button className={page === 'analyzer' ? 'active' : ''} disabled={busy} onClick={() => navigate('analyzer')}><Video size={16} />分析台</button><button className={page === 'compare' ? 'active' : ''} disabled={busy} onClick={() => navigate('compare')}><BarChart3 size={16} />数据对比</button><button className={page === 'guide' ? 'active' : ''} disabled={busy} onClick={() => navigate('guide')}><CircleHelp size={16} />使用指南</button><span className="version">BUILD 1.5.1</span></nav>
       </header>
       {page === 'analyzer' ? <main>
         <div className="workspace-column">

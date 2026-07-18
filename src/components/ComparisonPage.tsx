@@ -163,9 +163,9 @@ export function ComparisonPage() {
           <header className="panel-header"><div><span className="eyebrow">COMPARISON CURVE</span><strong>V–T 对比图</strong></div><div className="compare-chart-actions"><button className="maximize-action" disabled={!chartSeries.length} onClick={() => setShowPoints((value) => !value)}>{showPoints ? <Eye size={15} /> : <EyeOff size={15} />}{showPoints ? '隐藏点' : '显示点'}</button><button className="maximize-action" disabled={!chartSeries.length} onClick={() => setExpanded(true)}><Maximize2 size={16} />放大</button></div></header>
           <div className="compare-export-bar"><label><span>导出名称</span><input value={imageName} onChange={(event) => setImageName(event.target.value)} /></label><button disabled={!chartSeries.length || Boolean(videoProgress)} onClick={() => void exportImage('png')}><ImageDown size={14} />导出 PNG</button><button disabled={!chartSeries.length || Boolean(videoProgress)} onClick={() => void exportImage('svg')}><FileImage size={14} />导出 SVG</button></div>
           <div className="compare-video-export">
-            <div><Film size={16} /><span><strong>动态 V–T 视频</strong><small>曲线逐步显现，当前节点与速度实时高亮</small></span></div>
+            <div><Film size={16} /><span><strong>动态 V–T 视频</strong><small>当前时间与速度高亮显示</small></span></div>
             <label>播放倍率<select value={videoRate} disabled={Boolean(videoProgress)} onChange={(event) => setVideoRate(Number(event.target.value))}><option value="0.5">0.5×</option><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option></select></label>
-            <span className="video-estimate">预计成片 {chartSeries.length ? (videoSpan / videoRate + 1.3).toFixed(1) : '—'} 秒</span>
+            <span className="video-estimate">预计成片 {chartSeries.length ? (videoSpan / videoRate).toFixed(1) : '—'} 秒</span>
             <button disabled={!chartSeries.length || Boolean(videoProgress)} onClick={() => void exportVideo()}>{videoProgress ? <LoaderCircle className="spin" size={15} /> : <Film size={15} />}{videoProgress ? (videoProgress.stage === 'recording' ? `录制 ${Math.round(videoProgress.ratio * 100)}%` : `编码 ${Math.round(videoProgress.ratio * 100)}%`) : '导出 MP4'}</button>
             {videoProgress && <i style={{ width: `${Math.round(videoProgress.ratio * 100)}%` }} />}
           </div>

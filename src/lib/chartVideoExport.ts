@@ -52,12 +52,9 @@ export async function exportComparisonVideo(
   const maxSpeed = Math.max(100, ...allPoints.map((point) => point.speed))
   const fps = Math.max(24, Math.min(60, options.fps ?? 30))
   const playbackRate = Math.max(.25, Math.min(16, options.playbackRate))
-  const introSeconds = .55
-  const animationSeconds = Math.max(.5, (maxTime - minTime) / playbackRate)
-  const outroSeconds = .75
-  const totalSeconds = introSeconds + animationSeconds + outroSeconds
+  const animationSeconds = Math.max(1 / fps, (maxTime - minTime) / playbackRate)
 
-  drawFrame(context, cleanSeries, minTime, minTime, maxTime, maxSpeed, options.timeLabel, 0)
+  drawFrame(context, cleanSeries, minTime, minTime, maxTime, maxSpeed, options.timeLabel)
   const mimeType = selectRecorderMimeType()
   const stream = canvas.captureStream(fps)
   const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 8_000_000 })
@@ -73,11 +70,11 @@ export async function exportComparisonVideo(
   try {
     while (true) {
       const elapsed = (performance.now() - startedAt) / 1000
-      const animationProgress = Math.max(0, Math.min(1, (elapsed - introSeconds) / animationSeconds))
+      const animationProgress = Math.max(0, Math.min(1, elapsed / animationSeconds))
       const currentTime = minTime + (maxTime - minTime) * animationProgress
-      drawFrame(context, cleanSeries, currentTime, minTime, maxTime, maxSpeed, options.timeLabel, animationProgress)
-      onProgress({ stage: 'recording', ratio: Math.min(1, elapsed / totalSeconds) })
-      if (elapsed >= totalSeconds) break
+      drawFrame(context, cleanSeries, currentTime, minTime, maxTime, maxSpeed, options.timeLabel)
+      onProgress({ stage: 'recording', ratio: animationProgress })
+      if (elapsed >= animationSeconds) break
       await nextAnimationFrame()
     }
   } finally {
@@ -94,19 +91,19 @@ export async function exportComparisonVideo(
   const safeName = safeFileName(options.fileName, 'A9_VT_动态图')
   if (/mp4/i.test(captured.type)) {
     download(captured, `${safeName}.mp4`)
-    return { format: 'mp4' as const, duration: totalSeconds }
+    return { format: 'mp4' as const, duration: animationSeconds }
   }
 
   try {
     onProgress({ stage: 'encoding', ratio: 0 })
     const mp4 = await transcodeRecordingToMp4(captured, (ratio) => onProgress({ stage: 'encoding', ratio }))
     download(mp4, `${safeName}.mp4`)
-    return { format: 'mp4' as const, duration: totalSeconds }
+    return { format: 'mp4' as const, duration: animationSeconds }
   } catch (error) {
     download(captured, `${safeName}.webm`)
     return {
       format: 'webm' as const,
-      duration: totalSeconds,
+      duration: animationSeconds,
       warning: error instanceof Error ? error.message : 'MP4 转换失败',
     }
   }
@@ -120,7 +117,6 @@ function drawFrame(
   maxTime: number,
   maxSpeed: number,
   timeLabel: string,
-  progress: number,
 ) {
   const plotRight = WIDTH - PADDING.right
   const plotBottom = HEIGHT - PADDING.bottom
@@ -143,9 +139,6 @@ function drawFrame(
   context.fillStyle = '#f2f5f6'
   context.font = '700 25px Inter, "Microsoft YaHei", sans-serif'
   context.fillText('速度–时间动态对比', PADDING.left, 76)
-  context.fillStyle = '#737d80'
-  context.font = '12px Inter, "Microsoft YaHei", sans-serif'
-  context.fillText('曲线随时间显现 · 当前节点实时高亮', PADDING.left, 99)
 
   context.strokeStyle = '#30373a'
   context.lineWidth = 1
@@ -191,7 +184,7 @@ function drawFrame(
   context.stroke()
   context.setLineDash([])
 
-  const activeRows: { name: string; color: string; speed: number }[] = []
+  const activeRows: { color: string; speed: number }[] = []
   for (const item of series) {
     const visible = visibleSeries(item.points, currentTime)
     if (!visible.length) continue
@@ -222,14 +215,14 @@ function drawFrame(
     context.arc(x(active.time), y(active.speed), 7, 0, Math.PI * 2)
     context.fill()
     context.stroke()
-    activeRows.push({ name: item.name, color: item.color, speed: active.speed })
+    activeRows.push({ color: item.color, speed: active.speed })
   }
   context.restore()
 
   const cardX = WIDTH - PADDING.right + 30
   const cardY = PADDING.top
   const cardWidth = PADDING.right - 56
-  const cardHeight = Math.min(390, 96 + Math.max(1, activeRows.length) * 42)
+  const cardHeight = Math.min(500, 126 + Math.max(1, activeRows.length) * 58)
   context.fillStyle = 'rgba(17,20,21,.96)'
   context.strokeStyle = '#3a4245'
   context.lineWidth = 1
@@ -237,37 +230,31 @@ function drawFrame(
   context.fill()
   context.stroke()
   context.fillStyle = '#7c8689'
-  context.font = '10px ui-monospace, Consolas, monospace'
+  context.font = '11px Inter, "Microsoft YaHei", sans-serif'
   context.textAlign = 'left'
-  context.fillText('CURRENT NODE', cardX + 18, cardY + 25)
+  context.fillText('当前时间', cardX + 18, cardY + 27)
   context.fillStyle = '#ffffff'
-  context.font = '700 27px ui-monospace, Consolas, monospace'
-  context.fillText(`${currentTime.toFixed(3)}s`, cardX + 18, cardY + 58)
+  context.font = '700 29px ui-monospace, Consolas, monospace'
+  context.fillText(`${currentTime.toFixed(3)}s`, cardX + 18, cardY + 64)
   context.fillStyle = '#606a6d'
-  context.fillRect(cardX + 18, cardY + 74, cardWidth - 36, 1)
+  context.fillRect(cardX + 18, cardY + 82, cardWidth - 36, 1)
+  context.fillStyle = '#7c8689'
+  context.font = '11px Inter, "Microsoft YaHei", sans-serif'
+  context.fillText('速度', cardX + 18, cardY + 108)
   activeRows.slice(0, 7).forEach((row, index) => {
-    const rowY = cardY + 104 + index * 42
+    const rowY = cardY + 148 + index * 58
     context.fillStyle = row.color
     context.beginPath()
-    context.arc(cardX + 22, rowY - 4, 5, 0, Math.PI * 2)
+    context.arc(cardX + 24, rowY - 9, 7, 0, Math.PI * 2)
     context.fill()
-    context.fillStyle = '#aab2b5'
-    context.font = '11px Inter, "Microsoft YaHei", sans-serif'
-    context.fillText(ellipsis(context, row.name, cardWidth - 112), cardX + 36, rowY)
-    context.fillStyle = '#ffffff'
-    context.font = '700 14px ui-monospace, Consolas, monospace'
-    context.textAlign = 'right'
-    context.fillText(`${row.speed.toFixed(1)}`, cardX + cardWidth - 39, rowY)
-    context.fillStyle = '#6c7679'
-    context.font = '9px ui-monospace, Consolas, monospace'
-    context.fillText('km/h', cardX + cardWidth - 12, rowY)
+    context.fillStyle = row.color
+    context.font = `700 ${activeRows.length === 1 ? 52 : 40}px ui-monospace, Consolas, monospace`
+    context.fillText(row.speed.toFixed(1), cardX + 45, rowY)
+    context.fillStyle = '#879194'
+    context.font = '11px ui-monospace, Consolas, monospace'
+    context.fillText('KM/H', cardX + cardWidth - 48, rowY)
     context.textAlign = 'left'
   })
-
-  context.fillStyle = '#1d2224'
-  context.fillRect(PADDING.left, HEIGHT - 10, WIDTH - PADDING.left * 2, 3)
-  context.fillStyle = '#b7f34b'
-  context.fillRect(PADDING.left, HEIGHT - 10, (WIDTH - PADDING.left * 2) * progress, 3)
 }
 
 function visibleSeries(points: ChartVideoPoint[], currentTime: number) {
@@ -298,13 +285,6 @@ function selectRecorderMimeType() {
 function roundedRect(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
   context.beginPath()
   context.roundRect(x, y, width, height, radius)
-}
-
-function ellipsis(context: CanvasRenderingContext2D, value: string, maxWidth: number) {
-  if (context.measureText(value).width <= maxWidth) return value
-  let result = value
-  while (result.length > 1 && context.measureText(`${result}…`).width > maxWidth) result = result.slice(0, -1)
-  return `${result}…`
 }
 
 function nextAnimationFrame() {

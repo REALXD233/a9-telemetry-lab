@@ -1,12 +1,31 @@
 {
   "name": "a9-telemetry-lab",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.6.0",
   "type": "module",
+  "main": "desktop/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "desktop": "npm run build && electron .",
+    "dist:win": "npm run build && electron-builder --win portable"
+  },
+  "build": {
+    "appId": "cn.realxd.a9telemetrylab",
+    "productName": "A9 Telemetry Lab",
+    "artifactName": "A9-Telemetry-Lab-${version}-portable.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "desktop/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": ["portable"]
+    }
   },
   "dependencies": {
     "@ffmpeg/core": "^0.12.10",
@@ -23,7 +42,12 @@
   "devDependencies": {
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "electron": "^43.1.1",
+    "electron-builder": "^26.15.3",
     "typescript": "latest",
     "vite": "latest"
+  },
+  "allowScripts": {
+    "electron@43.1.1": true
   }
 }

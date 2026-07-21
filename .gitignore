@@ -1,4 +1,5 @@
 node_modules/
+.tools/
 dist/
 .chrome-qa/
 .chrome-*/
@@ -9,10 +10,14 @@ qa-*.csv
 videofile/
 speed-dataset/
 *.zip
-eng.traineddata
+/eng.traineddata
+release/
 *.tsbuildinfo
 *.log
 app-screenshot.png
+settings-screenshot.png
+mobile-screenshot.png
+ocr-test.png
 __pycache__/
 *.pyc
 .venv-speed/

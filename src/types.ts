@@ -40,7 +40,7 @@ export interface TelemetryPoint {
   corrected?: boolean
   rawSpeed?: number
   speedCorrected?: boolean
-  speedCorrectionReason?: '突变插值' | '5/9 混淆' | '相邻帧跳变' | '局部中位数' | '短缺插值' | '人工确认'
+  speedCorrectionReason?: '异常点插值修正' | '5/9 易混淆校正' | '速度阈值' | '相邻帧偏差校验' | '片段中值校验' | '漏识别点填补' | '人工确认'
 }
 
 export interface OcrResult {

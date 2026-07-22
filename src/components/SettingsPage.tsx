@@ -50,7 +50,7 @@ export function SettingsPage({ settings, onChange, onReset }: Props) {
             <label><span>相邻帧最大变化 <small>KM/H / 帧</small></span><input type="number" min="1" value={settings.maxSpeedChangePerFrame} onChange={(event) => number('maxSpeedChangePerFrame', Number(event.target.value))} /></label>
             <label><span>局部偏差 <small>KM/H</small></span><input type="number" min="1" value={settings.localDeviation} onChange={(event) => number('localDeviation', Number(event.target.value))} /></label>
           </div>
-          <p className="threshold-help"><strong>局部偏差</strong>是 OCR 值偏离邻域插值或中位数后，允许保留的最大误差。数值越小，修正越积极；数值越大，越倾向保留 OCR 原值。</p>
+          <p className="threshold-help"><strong>局部偏差</strong>是邻域判断容差：超过它的孤立值更容易被标记，但 5 / 9 候选必须落入该范围，两端差异超过它时也会触发保护。调小会提高孤立极值敏感度，同时更严格地拒绝不确定修正；建议先使用 18。</p>
         </div>
 
         <div className="panel settings-card checks-settings">

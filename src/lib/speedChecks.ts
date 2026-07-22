@@ -2,14 +2,13 @@ import type { RecognitionSettings, TelemetryPoint } from '../types'
 import { normalizeGameTime } from './time'
 
 export function correctSpeedOutliers(points: TelemetryPoint[], settings: RecognitionSettings) {
-  if (points.length < 3) return { points, count: 0 }
   const result = points.map((point) => ({ ...point })).sort((a, b) => a.videoTime - b.videoTime)
   const medianStep = median(result.slice(1).map((point, index) => point.videoTime - result[index].videoTime).filter((value) => value > .0001))
   let count = 0
 
   for (const point of result) {
     if (!isLocked(point) && point.speed > settings.maxSpeed) {
-      markCorrection(point, settings.maxSpeed, '速度跳变')
+      markCorrection(point, settings.maxSpeed, '相邻帧跳变')
       count += 1
     }
   }
@@ -30,35 +29,25 @@ export function correctSpeedOutliers(points: TelemetryPoint[], settings: Recogni
     }
   }
 
-  for (let index = 2; index < result.length - 2; index += 1) {
+  for (let index = 1; index < result.length - 1; index += 1) {
     const current = result[index]
     if (isLocked(current)) continue
     const left = result[index - 1]
     const right = result[index + 1]
-    const dtLeft = Math.max(.001, current.videoTime - left.videoTime)
-    const dtRight = Math.max(.001, right.videoTime - current.videoTime)
-    if (settings.checks.detectCuts && medianStep > 0 && (dtLeft > medianStep * 2.6 || dtRight > medianStep * 2.6)) continue
-
     const expected = interpolate(left, right, current.videoTime)
-    const localValues = result.slice(index - 2, index + 3).map((point) => point.speed).sort((a, b) => a - b)
-    const localMedian = localValues[2]
+    const localValues = result.slice(Math.max(0, index - 2), Math.min(result.length, index + 3)).map((point) => point.speed).sort((a, b) => a - b)
+    const localMedian = median(localValues)
     const deviation = Math.abs(current.speed - expected)
     const neighborSpread = Math.abs(right.speed - left.speed)
     if (settings.checks.neighborAgreement && neighborSpread > Math.max(settings.localDeviation, expected * .12)) continue
 
     let reason: TelemetryPoint['speedCorrectionReason'] | null = null
-    if (settings.checks.threeDigitRule && current.speed < 100 && left.speed >= 100 && right.speed >= 100) reason = '三位数规则'
-    if (!reason && settings.checks.speedJump) {
-      const leftRate = Math.abs(current.speed - left.speed) / dtLeft
-      const rightRate = Math.abs(right.speed - current.speed) / dtRight
-      if (leftRate > settings.maxSpeedChangePerSecond && rightRate > settings.maxSpeedChangePerSecond) reason = '速度跳变'
+    if (settings.checks.speedJump) {
+      const leftChange = Math.abs(current.speed - left.speed)
+      const rightChange = Math.abs(right.speed - current.speed)
+      if (leftChange > settings.maxSpeedChangePerFrame && rightChange > settings.maxSpeedChangePerFrame && deviation > settings.maxSpeedChangePerFrame) reason = '相邻帧跳变'
     }
     if (!reason && settings.checks.localMedian && Math.abs(current.speed - localMedian) > settings.localDeviation && deviation > settings.localDeviation) reason = '局部中位数'
-    if (!reason && settings.checks.accelerationSpike) {
-      const leftAcceleration = (current.speed - left.speed) / dtLeft
-      const rightAcceleration = (right.speed - current.speed) / dtRight
-      if (Math.abs(rightAcceleration - leftAcceleration) > settings.accelerationThreshold && deviation > settings.localDeviation) reason = '加速度突变'
-    }
     if (reason) {
       markCorrection(current, Math.round(expected), reason)
       count += 1
@@ -81,7 +70,6 @@ function fillShortGaps(points: TelemetryPoint[], step: number, settings: Recogni
     const gap = right.videoTime - left.videoTime
     const missing = Math.round(gap / step) - 1
     if (missing < 1 || missing > 2 || gap > step * 3.4) continue
-    if (settings.checks.detectCuts && Math.abs(right.speed - left.speed) > settings.localDeviation * 2) continue
     for (let offset = 1; offset <= missing; offset += 1) {
       const ratio = offset / (missing + 1)
       const videoTime = left.videoTime + gap * ratio

@@ -1,4 +1,4 @@
-import type { CropRegion, OcrResult } from '../types'
+import type { CropRegion, OcrResult, RecognitionModel } from '../types'
 import type { LayersModel, Tensor } from '@tensorflow/tfjs'
 
 let workerPromise: ReturnType<typeof createDigitWorker> | null = null
@@ -10,8 +10,29 @@ const SPEED_SLOT_WIDTH = 44
 const SPEED_RIGHT_EDGE = 134
 
 async function createDigitWorker() {
-  const { createWorker } = await import('tesseract.js')
-  return createWorker('eng')
+  const { createWorker, OEM } = await import('tesseract.js')
+  const assetUrl = (path: string) => new URL(`${import.meta.env.BASE_URL}${path}`, window.location.href).href
+  return createWorker('eng', OEM.LSTM_ONLY, {
+    workerPath: assetUrl('tesseract/worker.min.js'),
+    corePath: assetUrl('tesseract-core/tesseract-core-lstm.wasm.js'),
+    langPath: assetUrl('tessdata'),
+    gzip: false,
+    workerBlobURL: false,
+  })
+}
+
+export async function prepareRecognition(model: RecognitionModel) {
+  const jobs: Promise<unknown>[] = [getDigitWorker()]
+  if (model === 'a9-cn') jobs.push(loadSpeedModel())
+  await Promise.all(jobs)
+}
+
+async function getDigitWorker() {
+  workerPromise ??= createDigitWorker().catch((error) => {
+    workerPromise = null
+    throw error
+  })
+  return workerPromise
 }
 
 export async function cancelDigitRecognition() {
@@ -73,8 +94,7 @@ export function isRepeatedFrame(previous: Uint8Array | null, current: Uint8Array
 
 export async function recognizeDigits(canvas: HTMLCanvasElement, kind: 'speed' | 'timer', thorough = true): Promise<OcrResult> {
   const { PSM } = await import('tesseract.js')
-  workerPromise ??= createDigitWorker()
-  const worker = await workerPromise
+  const worker = await getDigitWorker()
   await worker.setParameters({
     tessedit_char_whitelist: kind === 'speed' ? '0123456789' : '0123456789:.',
     preserve_interword_spaces: '0',
@@ -98,7 +118,14 @@ export async function recognizeDigits(canvas: HTMLCanvasElement, kind: 'speed' |
 }
 
 async function loadSpeedModel() {
-  speedModelPromise ??= import('@tensorflow/tfjs').then((tf) => tf.loadLayersModel(`${import.meta.env.BASE_URL}models/speed-digits/model.json`))
+  speedModelPromise ??= import('@tensorflow/tfjs').then(async (tf) => {
+    await tf.ready()
+    const modelUrl = new URL(`${import.meta.env.BASE_URL}models/speed-digits/model.json`, window.location.href).href
+    return tf.loadLayersModel(modelUrl)
+  }).catch((error) => {
+    speedModelPromise = null
+    throw error
+  })
   return speedModelPromise
 }
 

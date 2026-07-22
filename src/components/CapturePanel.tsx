@@ -1,9 +1,6 @@
-import { Bot, Camera, Crosshair, LoaderCircle, Plus, Sparkles, WandSparkles } from 'lucide-react'
-import type { TelemetryPoint } from '../types'
+import { Bot, Camera, Crosshair, LoaderCircle, Sparkles, WandSparkles } from 'lucide-react'
 
 interface Props {
-  speed: string
-  gameTime: string
   frameInterval: number
   frameRate: number
   scope: 'full' | 'range'
@@ -15,16 +12,12 @@ interface Props {
   busy: boolean
   scanRunning: boolean
   progress: string
-  selected: TelemetryPoint | null
   disabled: boolean
-  onSpeed: (value: string) => void
-  onGameTime: (value: string) => void
   onFrameInterval: (value: number) => void
   onScope: (value: 'full' | 'range') => void
   onRangeStart: (value: number) => void
   onRangeEnd: (value: number) => void
   onUseCurrent: (edge: 'start' | 'end') => void
-  onManual: () => void
   onOcrCurrent: () => void
   onAutoLocate: () => void
   onAutoScan: () => void
@@ -34,7 +27,7 @@ export function CapturePanel(props: Props) {
   return (
     <section className="panel capture-panel">
       <header className="panel-header">
-        <div><span className="eyebrow">FRAME CAPTURE</span><strong>{props.selected ? '修正当前记录' : '采集控制台'}</strong></div>
+        <div><span className="eyebrow">SPEED EXTRACTION</span><strong>速度提取</strong></div>
         <div className="privacy-pill"><span />LOCAL PROCESSING</div>
       </header>
       <div className="capture-body">
@@ -43,9 +36,6 @@ export function CapturePanel(props: Props) {
           <figure><figcaption>计时区域</figcaption>{props.previewTimer ? <img src={props.previewTimer} alt="计时区域放大预览" /> : <span>等待视频画面</span>}</figure>
         </div>
         <button className="locate-action" disabled={props.disabled || props.busy} onClick={props.onAutoLocate}><WandSparkles size={14} />自动定位右上角数字区域</button>
-        <div className="field-group"><label htmlFor="speed">速度 <span>KM/H</span></label><div><input id="speed" inputMode="numeric" placeholder="—" value={props.speed} onChange={(e) => props.onSpeed(e.target.value.replace(/\D/g, '').slice(0, 3))} /><small>km/h</small></div></div>
-        <div className="field-group"><label htmlFor="game-time">局内时间 <span>单调递增</span></label><div><input id="game-time" inputMode="decimal" placeholder="00:00.000" value={props.gameTime} onChange={(e) => props.onGameTime(e.target.value)} /></div></div>
-        <button className="primary-action" disabled={props.busy} onClick={props.onManual}><Plus size={17} />{props.selected ? '保存修正' : '添加手动记录'}</button>
         <div className="capture-divider"><span>自动分析范围</span></div>
         <div className="scope-switch">
           <button className={props.scope === 'full' ? 'active' : ''} onClick={() => props.onScope('full')}>整段视频</button>

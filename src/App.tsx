@@ -1,17 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Aperture, BarChart3, CircleHelp, Cpu, Database, GitBranch, RotateCcw, Video } from 'lucide-react'
+import { Aperture, BarChart3, CircleHelp, Cpu, Database, GitBranch, ListChecks, RotateCcw, Settings2, Video } from 'lucide-react'
 import { CapturePanel } from './components/CapturePanel'
 import { DataPanel } from './components/DataPanel'
 import { TelemetryChart } from './components/TelemetryChart'
 import { VideoWorkspace, type VideoWorkspaceHandle } from './components/VideoWorkspace'
 import { ComparisonPage } from './components/ComparisonPage'
 import { GuidePage } from './components/GuidePage'
-import { cancelDigitRecognition, captureFrameSignature, captureRegion, isRepeatedFrame, recognizeDigits, recognizeSpeedDigits } from './lib/capture'
+import { ReviewForm } from './components/ReviewForm'
+import { SettingsPage } from './components/SettingsPage'
+import { cancelDigitRecognition, captureFrameSignature, captureRegion, isRepeatedFrame, prepareRecognition, recognizeDigits, recognizeSpeedDigits } from './lib/capture'
 import { exportCsv, exportXlsx } from './lib/export'
 import { normalizeGameTime, parseGameTime } from './lib/time'
 import { repairCapturedTimes, type RawTelemetryCapture } from './lib/timeRepair'
 import { transcodeToBrowserMp4 } from './lib/videoCompat'
-import type { CropRegion, OcrResult, RegionKind, TelemetryPoint } from './types'
+import { correctSpeedOutliers } from './lib/speedChecks'
+import { DEFAULT_RECOGNITION_SETTINGS, loadRecognitionSettings, saveRecognitionSettings } from './lib/settings'
+import type { CropRegion, OcrResult, RecognitionSettings, RegionKind, TelemetryPoint } from './types'
+
+type Page = 'extract' | 'review' | 'settings' | 'compare' | 'guide'
 
 const DEFAULT_REGIONS: Record<RegionKind, CropRegion> = {
   speed: { x: 0.8477, y: 0.0139, width: 0.1094, height: 0.125 },
@@ -48,7 +54,8 @@ export default function App() {
   const [progress, setProgress] = useState('')
   const [videoProcessing, setVideoProcessing] = useState('')
   const [exportName, setExportName] = useState('A9_速度分析')
-  const [page, setPage] = useState<'analyzer' | 'compare' | 'guide'>(() => pageFromHash())
+  const [settings, setSettings] = useState<RecognitionSettings>(() => loadRecognitionSettings())
+  const [page, setPage] = useState<Page>(() => pageFromHash())
   const selected = useMemo(() => points.find((point) => point.id === selectedId) ?? null, [points, selectedId])
 
   useEffect(() => () => { if (sourceRef.current) URL.revokeObjectURL(sourceRef.current) }, [])
@@ -58,9 +65,14 @@ export default function App() {
     return () => window.removeEventListener('hashchange', syncPage)
   }, [])
 
-  const navigate = (next: 'analyzer' | 'compare' | 'guide') => {
-    window.location.hash = next === 'analyzer' ? '' : next
+  const navigate = (next: Page) => {
+    window.location.hash = next === 'extract' ? '' : next
     setPage(next)
+  }
+
+  const updateSettings = (next: RecognitionSettings) => {
+    setSettings(next)
+    saveRecognitionSettings(next)
   }
 
   const loadFile = (file: File) => {
@@ -117,7 +129,7 @@ export default function App() {
   const savePoint = () => {
     const timeSeconds = parseGameTime(gameTime)
     const speedNumber = Number(speed)
-    if (timeSeconds == null || !Number.isFinite(speedNumber) || speedNumber < 0 || speedNumber > 600) {
+    if (timeSeconds == null || !Number.isFinite(speedNumber) || speedNumber < 0 || speedNumber > settings.maxSpeed) {
       setProgress('请输入有效速度和局内时间，例如 245 与 01:23.450')
       return
     }
@@ -138,11 +150,13 @@ export default function App() {
     if (!video || video.readyState < 2) return null
     let speedResult: OcrResult
     try {
-      speedResult = await recognizeSpeedDigits(video, regions.speed)
+      speedResult = settings.model === 'a9-cn'
+        ? await recognizeSpeedDigits(video, regions.speed)
+        : await recognizeDigits(captureRegion(video, regions.speed), 'speed', speedThorough)
     } catch {
       speedResult = await recognizeDigits(captureRegion(video, regions.speed), 'speed', speedThorough)
     }
-    if (!speedResult.value || speedResult.confidence < 55) {
+    if (settings.model === 'a9-cn' && (!speedResult.value || speedResult.confidence < 55)) {
       const fallback = await recognizeDigits(captureRegion(video, regions.speed), 'speed', speedThorough)
       if (!speedResult.value || (fallback.value && fallback.confidence > speedResult.confidence)) speedResult = fallback
     }
@@ -153,9 +167,12 @@ export default function App() {
 
   const ocrCurrent = async () => {
     setBusy(true)
-    setProgress('正在用速度字库模型识别速度，并用 OCR 读取计时器…')
+    const mobileMode = isMobileBrowser()
+    setProgress(`正在准备${settings.model === 'a9-cn' ? ' A9 国服速度模型' : '默认数字 OCR'}…`)
     try {
-      const result = await recognizeRawFrame()
+      await withTimeout(prepareRecognition(settings.model), 45000, 'OCR 初始化超时，请刷新页面或检查存储空间')
+      setProgress('模型已就绪，正在识别当前帧…')
+      const result = await recognizeRawFrame(!mobileMode, !mobileMode)
       if (!result) return
       const speedValue = result.speedResult.value ?? ''
       const timerValue = result.timerResult.value ?? ''
@@ -166,7 +183,7 @@ export default function App() {
       } else {
         const confidence = (result.speedResult.confidence + result.timerResult.confidence) / 2
         const engine = result.speedResult.engine === 'speed-model' ? '速度模型 + 计时 OCR' : 'OCR 回退'
-        setProgress(`识别完成 · ${engine} · 平均置信度 ${Math.round(confidence)}%，确认后点击“添加手动记录”`)
+        setProgress(`识别完成 · ${engine} · 平均置信度 ${Math.round(confidence)}%，结果已送入“复查编辑”页，人工保存后会永久锁定。`)
       }
     } catch (error) { setProgress(`OCR 失败：${error instanceof Error ? error.message : '未知错误'}`) }
     finally { setBusy(false) }
@@ -214,6 +231,9 @@ export default function App() {
     let activeFps = frameRate || 60
     const mobileMode = isMobileBrowser()
     try {
+      setProgress(`正在本地载入 OCR 资源与${settings.model === 'a9-cn' ? ' A9 国服模型' : '默认模型'}…`)
+      await withTimeout(prepareRecognition(settings.model), 45000, 'OCR 初始化超时；请关闭其他占用内存的页面后重试')
+      if (stopRef.current) return
       const fps = frameRate || await detectFrameRate(video)
       activeFps = fps
       setFrameRate(fps)
@@ -237,7 +257,7 @@ export default function App() {
         previousSignature = signature
         setProgress(`分析 ${sample + 1} / ${total} · 第 ${frame} 帧 · ${target.toFixed(3)}s${mobileMode ? ' · 速度轻量 / 计时高精度' : ''}`)
         await yieldToBrowser()
-        const result = await recognizeRawFrame(!mobileMode, true)
+        const result = await withTimeout(recognizeRawFrame(!mobileMode, !mobileMode), mobileMode ? 20000 : 30000, `第 ${frame} 帧 OCR 超时`)
         if (stopRef.current) break
         if (!result?.speedResult.value) continue
         const rawTime = result.timerResult.value ?? ''
@@ -252,14 +272,14 @@ export default function App() {
         })
       }
       const repaired = repairCapturedTimes(captured, points, activeFps)
-      const speedCorrection = correctSpeedOutliers(enforceMonotonic(dedupe([...points, ...repaired.points])))
+      const speedCorrection = correctSpeedOutliers(enforceMonotonic(dedupe([...points, ...repaired.points])), settings)
       setPoints(speedCorrection.points)
       const stopped = stopRef.current ? '已停止' : '完成'
       setProgress(`${stopped}：提取 ${repaired.points.length} 条；跳过 ${repeatedFrames} 个卡顿重复帧，修正 ${repaired.correctedCount} 条异常时间、${speedCorrection.count} 条突变速度。`)
     } catch (error) {
       if (stopRef.current) {
         const repaired = repairCapturedTimes(captured, points, activeFps)
-        const speedCorrection = correctSpeedOutliers(enforceMonotonic(dedupe([...points, ...repaired.points])))
+        const speedCorrection = correctSpeedOutliers(enforceMonotonic(dedupe([...points, ...repaired.points])), settings)
         setPoints(speedCorrection.points)
         setProgress(`已停止分析，保留已提取的 ${repaired.points.length} 条记录。`)
       } else {
@@ -291,7 +311,10 @@ export default function App() {
     setVideoUsable((wasUsable) => {
       if (!wasUsable) {
         setVideoProcessing('')
-        setProgress('视频已成功解码，可以播放、逐帧检查和开始分析')
+        setProgress('视频已成功解码，正在后台准备本地 OCR…')
+        void prepareRecognition(settings.model)
+          .then(() => setProgress(`OCR 已就绪 · ${settings.model === 'a9-cn' ? 'A9 国服速度模型' : '默认数字 OCR'} · 可以开始分析`))
+          .catch((error) => setProgress(`OCR 资源准备失败：${error instanceof Error ? error.message : '未知错误'}`))
       }
       return true
     })
@@ -328,33 +351,55 @@ export default function App() {
     }
   }
   const baseName = fileName.replace(/\.[^.]+$/, '') || 'A9_速度分析'
+  const workspace = <VideoWorkspace ref={workspaceRef} source={source} fileName={fileName} regions={regions} activeRegion={activeRegion} onActiveRegion={setActiveRegion} onRegionChange={updateRegion} onFile={loadFile} onVideoMetadata={handleVideoMetadata} onVideoPlayable={handleVideoPlayable} onVideoError={handleVideoError} onFrameChange={refreshPreviews} frameRate={frameRate} processingMessage={videoProcessing} />
+  const dataPanel = <DataPanel points={points} selectedId={selectedId} onSelect={selectPoint} onDelete={(id) => { setPoints((current) => current.filter((item) => item.id !== id)); if (selectedId === id) setSelectedId(null) }} onClear={() => { setPoints([]); setSelectedId(null) }} exportName={exportName} onExportName={setExportName} onExportCsv={() => void exportCsv(points, exportName || baseName)} onExportXlsx={() => void exportXlsx(points, exportName || baseName)} />
 
   return (
     <div className="app-shell">
       <header className="topbar">
         <div className="brand"><span><Aperture size={18} /></span><div><strong>A9 / TELEMETRY</strong><small>VIDEO PERFORMANCE LAB</small></div></div>
-        <div className="session-title"><i /><span>{page === 'analyzer' ? '本地分析会话' : page === 'compare' ? '多组数据对比' : '操作教学文档'}</span><strong>{page === 'analyzer' ? fileName || '未命名项目' : page === 'compare' ? 'V–T COMPARE' : 'USER GUIDE'}</strong></div>
-        <nav><button className={page === 'analyzer' ? 'active' : ''} disabled={busy} onClick={() => navigate('analyzer')}><Video size={16} />分析台</button><button className={page === 'compare' ? 'active' : ''} disabled={busy} onClick={() => navigate('compare')}><BarChart3 size={16} />数据对比</button><button className={page === 'guide' ? 'active' : ''} disabled={busy} onClick={() => navigate('guide')}><CircleHelp size={16} />使用指南</button><span className="version">BUILD 1.5.1</span></nav>
+        <div className="session-title"><i /><span>{pageTitle(page)}</span><strong>{page === 'extract' || page === 'review' ? fileName || '未命名项目' : page.toUpperCase()}</strong></div>
+        <nav>
+          <button title="速度提取" className={page === 'extract' ? 'active' : ''} disabled={busy} onClick={() => navigate('extract')}><Video size={16} />速度提取</button>
+          <button title="复查编辑" className={page === 'review' ? 'active' : ''} disabled={busy} onClick={() => navigate('review')}><ListChecks size={16} />复查编辑</button>
+          <button title="识别设置" className={page === 'settings' ? 'active' : ''} disabled={busy} onClick={() => navigate('settings')}><Settings2 size={16} />识别设置</button>
+          <button title="数据对比" className={page === 'compare' ? 'active' : ''} disabled={busy} onClick={() => navigate('compare')}><BarChart3 size={16} />数据对比</button>
+          <button title="使用指南" className={page === 'guide' ? 'active' : ''} disabled={busy} onClick={() => navigate('guide')}><CircleHelp size={16} />使用指南</button>
+          <span className="version">BUILD 1.6.0</span>
+        </nav>
       </header>
-      {page === 'analyzer' ? <main>
+      {page === 'extract' ? <main className="extract-main">
         <div className="workspace-column">
-          <VideoWorkspace ref={workspaceRef} source={source} fileName={fileName} regions={regions} activeRegion={activeRegion} onActiveRegion={setActiveRegion} onRegionChange={updateRegion} onFile={loadFile} onVideoMetadata={handleVideoMetadata} onVideoPlayable={handleVideoPlayable} onVideoError={handleVideoError} onFrameChange={refreshPreviews} frameRate={frameRate} processingMessage={videoProcessing} />
+          {workspace}
           <TelemetryChart points={points} />
         </div>
         <div className="control-column">
-          <CapturePanel speed={speed} gameTime={gameTime} frameInterval={frameInterval} frameRate={frameRate} scope={scope} rangeStart={rangeStart} rangeEnd={rangeEnd} duration={duration} previewSpeed={previewSpeed} previewTimer={previewTimer} busy={busy} scanRunning={scanRunning} progress={progress} selected={selected} disabled={!videoUsable} onSpeed={setSpeed} onGameTime={setGameTime} onFrameInterval={setFrameInterval} onScope={setScope} onRangeStart={setRangeStart} onRangeEnd={setRangeEnd} onUseCurrent={useCurrentEdge} onManual={savePoint} onOcrCurrent={ocrCurrent} onAutoLocate={autoLocate} onAutoScan={autoScan} />
-          <DataPanel points={points} selectedId={selectedId} onSelect={selectPoint} onDelete={(id) => { setPoints((current) => current.filter((item) => item.id !== id)); if (selectedId === id) setSelectedId(null) }} onClear={() => { setPoints([]); setSelectedId(null) }} exportName={exportName} onExportName={setExportName} onExportCsv={() => void exportCsv(points, exportName || baseName)} onExportXlsx={() => void exportXlsx(points, exportName || baseName)} />
+          <CapturePanel frameInterval={frameInterval} frameRate={frameRate} scope={scope} rangeStart={rangeStart} rangeEnd={rangeEnd} duration={duration} previewSpeed={previewSpeed} previewTimer={previewTimer} busy={busy} scanRunning={scanRunning} progress={progress} disabled={!videoUsable} onFrameInterval={setFrameInterval} onScope={setScope} onRangeStart={setRangeStart} onRangeEnd={setRangeEnd} onUseCurrent={useCurrentEdge} onOcrCurrent={ocrCurrent} onAutoLocate={autoLocate} onAutoScan={autoScan} />
+          <section className="panel extraction-summary"><span className="eyebrow">NEXT STEP</span><strong>{points.length} 条数据等待复查</strong><p>完成提取后前往“复查编辑”。点击记录会自动跳到对应视频帧，人工保存的数据将永久锁定。</p><button disabled={!points.length} onClick={() => navigate('review')}>进入复查编辑</button></section>
         </div>
-      </main> : page === 'compare' ? <ComparisonPage /> : <GuidePage />}
-      <footer><span><i />系统就绪</span><span><Cpu size={13} />浏览器本地计算</span><span><Database size={13} />数据不会上传服务器</span>{page === 'analyzer' && <button onClick={() => setRegions(DEFAULT_REGIONS)}><RotateCcw size={13} />重置框选</button>}<a href="https://github.com/REALXD233/a9-telemetry-lab" target="_blank" rel="noreferrer"><GitBranch size={13} />项目源码</a></footer>
+      </main> : page === 'review' ? <main className="review-main">
+        <div className="workspace-column">{workspace}<TelemetryChart points={points} /></div>
+        <div className="control-column"><ReviewForm speed={speed} gameTime={gameTime} selected={selected} disabled={!videoUsable} onSpeed={setSpeed} onGameTime={setGameTime} onSave={savePoint} onCancel={() => { setSelectedId(null); setSpeed(''); setGameTime('') }} />{dataPanel}</div>
+      </main> : page === 'settings' ? <SettingsPage settings={settings} onChange={updateSettings} onReset={() => updateSettings(DEFAULT_RECOGNITION_SETTINGS)} /> : page === 'compare' ? <ComparisonPage /> : <GuidePage />}
+      <footer><span><i />系统就绪</span><span><Cpu size={13} />浏览器本地计算</span><span><Database size={13} />数据不会上传服务器</span>{(page === 'extract' || page === 'review') && <button onClick={() => setRegions(DEFAULT_REGIONS)}><RotateCcw size={13} />重置框选</button>}<a href="https://github.com/REALXD233/a9-telemetry-lab" target="_blank" rel="noreferrer"><GitBranch size={13} />项目源码</a></footer>
     </div>
   )
 }
 
-function pageFromHash(): 'analyzer' | 'compare' | 'guide' {
+function pageFromHash(): Page {
+  if (window.location.hash === '#review') return 'review'
+  if (window.location.hash === '#settings') return 'settings'
   if (window.location.hash === '#compare') return 'compare'
   if (window.location.hash === '#guide') return 'guide'
-  return 'analyzer'
+  return 'extract'
+}
+
+function pageTitle(page: Page) {
+  if (page === 'extract') return '速度提取'
+  if (page === 'review') return '复查编辑'
+  if (page === 'settings') return '识别与质量检查'
+  if (page === 'compare') return '多组数据对比'
+  return '操作教学文档'
 }
 
 async function detectFrameRate(video: HTMLVideoElement) {
@@ -492,81 +537,6 @@ function dedupe(points: TelemetryPoint[]) {
   return [...seen.values()]
 }
 
-function correctSpeedOutliers(points: TelemetryPoint[]) {
-  if (points.length < 3) return { points, count: 0 }
-  const result = points.map((point) => ({ ...point }))
-  let count = 0
-
-  // Tesseract 对发光 HUD 最常见的局部混淆是把 5 的上半部闭合成 9。
-  // 只有前后样本形成稳定趋势，并且 9→5 候选显著更贴近插值时才替换。
-  for (let index = 1; index < result.length - 1; index += 1) {
-    const current = result[index]
-    if (isLockedPoint(current)) continue
-    if (!String(current.speed).includes('9')) continue
-    const left = result[index - 1]
-    const right = result[index + 1]
-    const span = right.videoTime - left.videoTime
-    const ratio = span > 0 ? (current.videoTime - left.videoTime) / span : .5
-    const expected = left.speed + (right.speed - left.speed) * ratio
-    const neighborSpread = Math.abs(right.speed - left.speed)
-    if (neighborSpread > Math.max(14, expected * .1)) continue
-    const alternatives = fiveNineAlternatives(current.speed)
-    const best = alternatives.sort((a, b) => Math.abs(a - expected) - Math.abs(b - expected))[0]
-    if (best == null) continue
-    const originalDeviation = Math.abs(current.speed - expected)
-    const candidateDeviation = Math.abs(best - expected)
-    const candidateTolerance = Math.max(5, neighborSpread * 1.25 + 1)
-    if (candidateDeviation <= candidateTolerance && originalDeviation - candidateDeviation >= 3) {
-      current.rawSpeed ??= current.speed
-      current.speed = best
-      current.speedCorrected = true
-      current.speedCorrectionReason = '5/9 混淆'
-      count += 1
-    }
-  }
-
-  if (result.length < 5) return { points: result, count }
-  const flagged = new Set<number>()
-  for (let index = 2; index < result.length - 2; index += 1) {
-    if (isLockedPoint(result[index])) continue
-    const window = result.slice(index - 2, index + 3).map((point) => point.speed).sort((a, b) => a - b)
-    const median = window[2]
-    const threshold = Math.max(22, median * .18)
-    const leftFar = Math.abs(result[index].speed - result[index - 1].speed) > threshold
-    const rightFar = Math.abs(result[index].speed - result[index + 1].speed) > threshold
-    if (leftFar && rightFar && Math.abs(result[index].speed - median) > threshold) flagged.add(index)
-  }
-  for (const index of flagged) {
-    if (isLockedPoint(result[index])) continue
-    let left = index - 1
-    let right = index + 1
-    while (left >= 0 && flagged.has(left)) left -= 1
-    while (right < result.length && flagged.has(right)) right += 1
-    if (left < 0 || right >= result.length) continue
-    const span = result[right].videoTime - result[left].videoTime
-    const ratio = span > 0 ? (result[index].videoTime - result[left].videoTime) / span : .5
-    const correctedSpeed = Math.round(result[left].speed + (result[right].speed - result[left].speed) * ratio)
-    result[index].rawSpeed ??= result[index].speed
-    result[index].speed = Math.max(0, Math.min(600, correctedSpeed))
-    result[index].speedCorrected = true
-    result[index].speedCorrectionReason = '突变插值'
-    count += 1
-  }
-  return { points: result, count }
-}
-
-function fiveNineAlternatives(speed: number) {
-  const source = String(Math.round(speed))
-  let variants = new Set([source])
-  for (let index = 0; index < source.length; index += 1) {
-    if (source[index] !== '9') continue
-    const additions = [...variants].map((value) => `${value.slice(0, index)}5${value.slice(index + 1)}`)
-    variants = new Set([...variants, ...additions])
-  }
-  variants.delete(source)
-  return [...variants].map(Number).filter((value) => Number.isFinite(value) && value >= 0 && value <= 600)
-}
-
 function isLockedPoint(point: TelemetryPoint) {
   return point.locked === true || point.source === '手动'
 }
@@ -579,7 +549,19 @@ function isMobileBrowser() {
 }
 
 function yieldToBrowser() {
-  return new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+  return new Promise<void>((resolve) => window.setTimeout(resolve, isMobileBrowser() ? 16 : 0))
+}
+
+async function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string) {
+  let timer = 0
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => { timer = window.setTimeout(() => reject(new Error(message)), milliseconds) }),
+    ])
+  } finally {
+    window.clearTimeout(timer)
+  }
 }
 
 function makeCandidates(kind: RegionKind, current: CropRegion): CropRegion[] {

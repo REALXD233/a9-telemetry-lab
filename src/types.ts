@@ -1,4 +1,25 @@
 export type RegionKind = 'speed' | 'timer'
+export type RecognitionModel = 'default' | 'a9-cn'
+
+export interface SpeedCheckSettings {
+  threeDigitRule: boolean
+  speedJump: boolean
+  localTrend: boolean
+  fillShortGaps: boolean
+  localMedian: boolean
+  accelerationSpike: boolean
+  detectCuts: boolean
+  neighborAgreement: boolean
+}
+
+export interface RecognitionSettings {
+  model: RecognitionModel
+  maxSpeed: number
+  maxSpeedChangePerSecond: number
+  localDeviation: number
+  accelerationThreshold: number
+  checks: SpeedCheckSettings
+}
 
 export interface CropRegion {
   x: number
@@ -21,7 +42,7 @@ export interface TelemetryPoint {
   corrected?: boolean
   rawSpeed?: number
   speedCorrected?: boolean
-  speedCorrectionReason?: '突变插值' | '5/9 混淆'
+  speedCorrectionReason?: '突变插值' | '5/9 混淆' | '速度跳变' | '局部中位数' | '加速度突变' | '三位数规则' | '短缺插值'
 }
 
 export interface OcrResult {

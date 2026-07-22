@@ -8,7 +8,7 @@ export function correctSpeedOutliers(points: TelemetryPoint[], settings: Recogni
 
   for (const point of result) {
     if (!isLocked(point) && point.speed > settings.maxSpeed) {
-      markCorrection(point, settings.maxSpeed, '相邻帧跳变')
+      markCorrection(point, settings.maxSpeed, '速度阈值')
       count += 1
     }
   }
@@ -23,7 +23,7 @@ export function correctSpeedOutliers(points: TelemetryPoint[], settings: Recogni
       const best = fiveNineAlternatives(current.speed).sort((a, b) => Math.abs(a - expected) - Math.abs(b - expected))[0]
       if (best == null) continue
       if (Math.abs(best - expected) <= settings.localDeviation && Math.abs(current.speed - expected) - Math.abs(best - expected) >= 3) {
-        markCorrection(current, best, '5/9 混淆')
+        markCorrection(current, best, '5/9 易混淆校正')
         count += 1
       }
     }
@@ -45,9 +45,9 @@ export function correctSpeedOutliers(points: TelemetryPoint[], settings: Recogni
     if (settings.checks.speedJump) {
       const leftChange = Math.abs(current.speed - left.speed)
       const rightChange = Math.abs(right.speed - current.speed)
-      if (leftChange > settings.maxSpeedChangePerFrame && rightChange > settings.maxSpeedChangePerFrame && deviation > settings.maxSpeedChangePerFrame) reason = '相邻帧跳变'
+      if (leftChange > settings.maxSpeedChangePerFrame && rightChange > settings.maxSpeedChangePerFrame && deviation > settings.maxSpeedChangePerFrame) reason = '相邻帧偏差校验'
     }
-    if (!reason && settings.checks.localMedian && Math.abs(current.speed - localMedian) > settings.localDeviation && deviation > settings.localDeviation) reason = '局部中位数'
+    if (!reason && settings.checks.localMedian && Math.abs(current.speed - localMedian) > settings.localDeviation && deviation > settings.localDeviation) reason = '片段中值校验'
     if (reason) {
       markCorrection(current, Math.round(expected), reason)
       count += 1
@@ -84,7 +84,7 @@ function fillShortGaps(points: TelemetryPoint[], step: number, settings: Recogni
         confidence: Math.min(left.confidence ?? 0, right.confidence ?? 0),
         corrected: true,
         speedCorrected: true,
-        speedCorrectionReason: '短缺插值',
+        speedCorrectionReason: '漏识别点填补',
       })
       onInsert()
     }

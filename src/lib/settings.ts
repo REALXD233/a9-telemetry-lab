@@ -6,11 +6,11 @@ export const DEFAULT_RECOGNITION_SETTINGS: RecognitionSettings = {
   maxSpeedChangePerFrame: 35,
   localDeviation: 18,
   checks: {
-    speedJump: true,
-    localTrend: true,
-    fillShortGaps: true,
-    localMedian: true,
-    neighborAgreement: true,
+    speedJump: false,
+    localTrend: false,
+    fillShortGaps: false,
+    localMedian: false,
+    neighborAgreement: false,
   },
 }
 

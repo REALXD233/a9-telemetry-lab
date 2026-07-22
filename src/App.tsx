@@ -15,9 +15,10 @@ import { repairCapturedTimes, type RawTelemetryCapture } from './lib/timeRepair'
 import { transcodeToBrowserMp4 } from './lib/videoCompat'
 import { correctSpeedOutliers } from './lib/speedChecks'
 import { DEFAULT_RECOGNITION_SETTINGS, loadRecognitionSettings, saveRecognitionSettings } from './lib/settings'
-import type { CropRegion, OcrResult, RecognitionSettings, RegionKind, TelemetryPoint } from './types'
+import type { CropRegion, DataPreference, OcrResult, RecognitionSettings, RegionKind, TelemetryPoint } from './types'
 
 type Page = 'extract' | 'review' | 'settings' | 'compare' | 'guide'
+type CurrentFrameRecognition = { videoTime: number; rawSpeed: string; rawGameTime: string; confidence: number; engine: string }
 
 const DEFAULT_REGIONS: Record<RegionKind, CropRegion> = {
   speed: { x: 0.8477, y: 0.0139, width: 0.1094, height: 0.125 },
@@ -40,6 +41,9 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [speed, setSpeed] = useState('')
   const [gameTime, setGameTime] = useState('')
+  const [currentSpeed, setCurrentSpeed] = useState('')
+  const [currentGameTime, setCurrentGameTime] = useState('')
+  const [currentRecognition, setCurrentRecognition] = useState<CurrentFrameRecognition | null>(null)
   const [frameInterval, setFrameInterval] = useState(30)
   const [frameRate, setFrameRate] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -54,6 +58,7 @@ export default function App() {
   const [progress, setProgress] = useState('')
   const [videoProcessing, setVideoProcessing] = useState('')
   const [exportName, setExportName] = useState('A9_速度分析')
+  const [exportPreference, setExportPreference] = useState<DataPreference>('corrected')
   const [settings, setSettings] = useState<RecognitionSettings>(() => loadRecognitionSettings())
   const [page, setPage] = useState<Page>(() => pageFromHash())
   const selected = useMemo(() => points.find((point) => point.id === selectedId) ?? null, [points, selectedId])
@@ -86,6 +91,9 @@ export default function App() {
     setExportName(file.name.replace(/\.[^.]+$/, '') || 'A9_速度分析')
     setPoints([])
     setSelectedId(null)
+    setCurrentSpeed('')
+    setCurrentGameTime('')
+    setCurrentRecognition(null)
     setFrameRate(0)
     setVideoUsable(false)
     setVideoProcessing('')
@@ -134,15 +142,57 @@ export default function App() {
       return
     }
     const existing = selectedId
+    const previous = existing ? points.find((point) => point.id === existing) : null
+    const originalSpeed = previous?.rawSpeed ?? previous?.speed
+    const originalTime = previous?.rawGameTime ?? previous?.gameTime
+    const originalTimeSeconds = parseGameTime(originalTime ?? '')
     const next: TelemetryPoint = {
       id: existing ?? crypto.randomUUID(), gameTime: normalizeGameTime(timeSeconds), timeSeconds, speed: speedNumber,
-      videoTime: workspaceRef.current?.video?.currentTime ?? 0, source: '手动', locked: true,
+      videoTime: previous?.videoTime ?? workspaceRef.current?.video?.currentTime ?? 0, source: '手动', locked: true,
+      confidence: previous?.confidence,
+      rawSpeed: originalSpeed,
+      rawGameTime: originalTime,
+      corrected: originalTimeSeconds != null && Math.abs(originalTimeSeconds - timeSeconds) > .0005,
+      speedCorrected: originalSpeed != null && originalSpeed !== speedNumber,
+      speedCorrectionReason: originalSpeed != null && originalSpeed !== speedNumber ? '人工确认' : undefined,
     }
     setPoints((current) => enforceMonotonic(existing ? current.map((item) => item.id === existing ? next : item) : [...current, next]))
     setSelectedId(null)
     setSpeed('')
     setGameTime('')
     setProgress(existing ? '记录已修正，并重新检查了时间连续性' : '已添加一条数据')
+  }
+
+  const addCurrentRecognition = () => {
+    if (!currentRecognition) return
+    const timeSeconds = parseGameTime(currentGameTime)
+    const speedNumber = Number(currentSpeed)
+    if (timeSeconds == null || !Number.isFinite(speedNumber) || speedNumber < 0 || speedNumber > settings.maxSpeed) {
+      setProgress('请先检查当前帧结果，并输入有效速度与局内时间')
+      return
+    }
+    const rawSpeed = Number(currentRecognition.rawSpeed)
+    const rawTimeSeconds = parseGameTime(currentRecognition.rawGameTime)
+    const next: TelemetryPoint = {
+      id: crypto.randomUUID(),
+      gameTime: normalizeGameTime(timeSeconds),
+      timeSeconds,
+      speed: speedNumber,
+      videoTime: currentRecognition.videoTime,
+      source: '手动',
+      locked: true,
+      confidence: currentRecognition.confidence,
+      rawSpeed: Number.isFinite(rawSpeed) ? rawSpeed : speedNumber,
+      rawGameTime: currentRecognition.rawGameTime || currentGameTime,
+      corrected: rawTimeSeconds != null && Math.abs(rawTimeSeconds - timeSeconds) > .0005,
+      speedCorrected: Number.isFinite(rawSpeed) && rawSpeed !== speedNumber,
+      speedCorrectionReason: Number.isFinite(rawSpeed) && rawSpeed !== speedNumber ? '人工确认' : undefined,
+    }
+    setPoints((current) => enforceMonotonic(dedupe([...current, next])))
+    setCurrentRecognition(null)
+    setCurrentSpeed('')
+    setCurrentGameTime('')
+    setProgress(`已将 ${next.gameTime} · ${next.speed} km/h 作为人工真值添加并锁定`)
   }
 
   const recognizeRawFrame = async (speedThorough = true, timerThorough = true) => {
@@ -176,14 +226,15 @@ export default function App() {
       if (!result) return
       const speedValue = result.speedResult.value ?? ''
       const timerValue = result.timerResult.value ?? ''
-      setSpeed(speedValue)
-      setGameTime(timerValue)
+      const confidence = (result.speedResult.confidence + result.timerResult.confidence) / 2
+      const engine = result.speedResult.engine === 'speed-model' ? '速度模型 + 计时 OCR' : 'OCR 回退'
+      setCurrentSpeed(speedValue)
+      setCurrentGameTime(timerValue)
+      setCurrentRecognition({ videoTime: result.videoTime, rawSpeed: speedValue, rawGameTime: timerValue, confidence, engine })
       if (!speedValue || parseGameTime(timerValue) == null) {
         setProgress(`识别不完整：速度“${result.speedResult.raw || '—'}”，时间“${result.timerResult.raw || '—'}”。请检查放大预览。`)
       } else {
-        const confidence = (result.speedResult.confidence + result.timerResult.confidence) / 2
-        const engine = result.speedResult.engine === 'speed-model' ? '速度模型 + 计时 OCR' : 'OCR 回退'
-        setProgress(`识别完成 · ${engine} · 平均置信度 ${Math.round(confidence)}%，结果已送入“复查编辑”页，人工保存后会永久锁定。`)
+        setProgress(`识别完成 · ${engine} · 平均置信度 ${Math.round(confidence)}%。可在本页检查、修改并手动添加。`)
       }
     } catch (error) { setProgress(`OCR 失败：${error instanceof Error ? error.message : '未知错误'}`) }
     finally { setBusy(false) }
@@ -352,7 +403,7 @@ export default function App() {
   }
   const baseName = fileName.replace(/\.[^.]+$/, '') || 'A9_速度分析'
   const workspace = <VideoWorkspace ref={workspaceRef} source={source} fileName={fileName} regions={regions} activeRegion={activeRegion} onActiveRegion={setActiveRegion} onRegionChange={updateRegion} onFile={loadFile} onVideoMetadata={handleVideoMetadata} onVideoPlayable={handleVideoPlayable} onVideoError={handleVideoError} onFrameChange={refreshPreviews} frameRate={frameRate} processingMessage={videoProcessing} />
-  const dataPanel = <DataPanel points={points} selectedId={selectedId} onSelect={selectPoint} onDelete={(id) => { setPoints((current) => current.filter((item) => item.id !== id)); if (selectedId === id) setSelectedId(null) }} onClear={() => { setPoints([]); setSelectedId(null) }} exportName={exportName} onExportName={setExportName} onExportCsv={() => void exportCsv(points, exportName || baseName)} onExportXlsx={() => void exportXlsx(points, exportName || baseName)} />
+  const dataPanel = <DataPanel points={points} selectedId={selectedId} onSelect={selectPoint} onDelete={(id) => { setPoints((current) => current.filter((item) => item.id !== id)); if (selectedId === id) setSelectedId(null) }} onClear={() => { setPoints([]); setSelectedId(null) }} exportName={exportName} onExportName={setExportName} exportPreference={exportPreference} onExportPreference={setExportPreference} onExportCsv={() => void exportCsv(points, exportName || baseName, exportPreference)} onExportXlsx={() => void exportXlsx(points, exportName || baseName, exportPreference)} />
 
   return (
     <div className="app-shell">
@@ -365,7 +416,7 @@ export default function App() {
           <button title="识别设置" className={page === 'settings' ? 'active' : ''} disabled={busy} onClick={() => navigate('settings')}><Settings2 size={16} />识别设置</button>
           <button title="数据对比" className={page === 'compare' ? 'active' : ''} disabled={busy} onClick={() => navigate('compare')}><BarChart3 size={16} />数据对比</button>
           <button title="使用指南" className={page === 'guide' ? 'active' : ''} disabled={busy} onClick={() => navigate('guide')}><CircleHelp size={16} />使用指南</button>
-          <span className="version">BUILD 1.6.0</span>
+          <span className="version">BUILD 1.7.0</span>
         </nav>
       </header>
       {page === 'extract' ? <main className="extract-main">
@@ -374,7 +425,7 @@ export default function App() {
           <TelemetryChart points={points} />
         </div>
         <div className="control-column">
-          <CapturePanel frameInterval={frameInterval} frameRate={frameRate} scope={scope} rangeStart={rangeStart} rangeEnd={rangeEnd} duration={duration} previewSpeed={previewSpeed} previewTimer={previewTimer} busy={busy} scanRunning={scanRunning} progress={progress} disabled={!videoUsable} onFrameInterval={setFrameInterval} onScope={setScope} onRangeStart={setRangeStart} onRangeEnd={setRangeEnd} onUseCurrent={useCurrentEdge} onOcrCurrent={ocrCurrent} onAutoLocate={autoLocate} onAutoScan={autoScan} />
+          <CapturePanel frameInterval={frameInterval} frameRate={frameRate} scope={scope} rangeStart={rangeStart} rangeEnd={rangeEnd} duration={duration} previewSpeed={previewSpeed} previewTimer={previewTimer} busy={busy} scanRunning={scanRunning} progress={progress} disabled={!videoUsable} currentSpeed={currentSpeed} currentGameTime={currentGameTime} currentResult={currentRecognition} onFrameInterval={setFrameInterval} onScope={setScope} onRangeStart={setRangeStart} onRangeEnd={setRangeEnd} onUseCurrent={useCurrentEdge} onOcrCurrent={ocrCurrent} onCurrentSpeed={setCurrentSpeed} onCurrentGameTime={setCurrentGameTime} onAddCurrent={addCurrentRecognition} onAutoLocate={autoLocate} onAutoScan={autoScan} />
           <section className="panel extraction-summary"><span className="eyebrow">NEXT STEP</span><strong>{points.length} 条数据等待复查</strong><p>完成提取后前往“复查编辑”。点击记录会自动跳到对应视频帧，人工保存的数据将永久锁定。</p><button disabled={!points.length} onClick={() => navigate('review')}>进入复查编辑</button></section>
         </div>
       </main> : page === 'review' ? <main className="review-main">

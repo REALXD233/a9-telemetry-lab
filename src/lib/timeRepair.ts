@@ -51,6 +51,7 @@ export function repairCapturedTimes(rawPoints: RawTelemetryCapture[], references
         gameTime: normalizeGameTime(timeSeconds),
         timeSeconds,
         speed: raw.speed,
+        rawSpeed: raw.speed,
         videoTime: raw.videoTime,
         source: raw.source,
         confidence: raw.confidence,

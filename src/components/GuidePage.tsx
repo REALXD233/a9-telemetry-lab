@@ -18,7 +18,7 @@ export function GuidePage() {
         <article className="panel guide-card"><Gauge /><div><strong>速度模型</strong><p>专用数字模型仅识别速度表。低置信度或模型加载失败时，系统才会回退到 OCR。</p></div></article>
         <article className="panel guide-card"><Clock3 /><div><strong>时间、锚点与卡顿帧</strong><p>计时 OCR 使用多路投票，并按置信度寻找最稳定的时间偏移簇；手动记录是绝对锚点。单帧误识别不会向后传播，重复帧会被跳过。</p></div></article>
         <article className="panel guide-card"><Focus /><div><strong>自动定位特征</strong><p>速度区域偏黑、数字高亮；计时区域偏红。自动定位后仍应检查右侧放大预览。</p></div></article>
-        <article className="panel guide-card"><Gauge /><div><strong>速度检查阈值</strong><p>相邻帧变化限制只处理同时远离前后两帧的孤立点。局部偏差调小会提高极值敏感度，也会更严格拒绝不确定候选；默认 18 适合作为起点。所有检查都是轻量后处理。</p></div></article>
+        <article className="panel guide-card"><Gauge /><div><strong>速度校验阈值</strong><p>相邻帧偏差校验只处理同时远离前后两帧的孤立点。片段偏差容限调小会提高异常值敏感度，也会更严格地拒绝不确定候选；默认值 18 适合作为起点。五项数据校验默认关闭，且均为轻量后处理。</p></div></article>
         <article className="panel guide-card"><FileSpreadsheet /><div><strong>对比与媒体导出</strong><p>导入 CSV/XLSX 后可分别裁剪曲线。动态 MP4 在 1× 时严格对应数据时间，当前节点仅显示时间与放大的速度；也可选择 0.5×–8× 倍率。</p></div></article>
       </div>
     </section>

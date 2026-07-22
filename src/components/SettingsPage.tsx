@@ -8,11 +8,11 @@ interface Props {
 }
 
 const CHECKS: { key: keyof SpeedCheckSettings; title: string; detail: string }[] = [
-  { key: 'speedJump', title: '相邻帧速度变化限制', detail: '当前点与前后采样帧都超过阈值时，按两侧趋势修正 · 性能影响极低' },
-  { key: 'localTrend', title: '局部趋势检查', detail: '结合前后趋势修正 5 / 9 混淆 · 性能影响极低' },
-  { key: 'fillShortGaps', title: '填补短暂空缺', detail: '对最多连续两次 OCR 漏检做线性插值 · 性能影响极低' },
-  { key: 'localMedian', title: '局部中位数检查', detail: '用最多五点窗口发现孤立极值 · 性能影响低' },
-  { key: 'neighborAgreement', title: '两端一致性保护', detail: '前后趋势分歧较大时不自动修改 · 性能影响极低' },
+  { key: 'speedJump', title: '相邻帧偏差校验', detail: '当前点与前后采样帧的偏差均超过阈值时，按两侧趋势修正 · 性能影响极低' },
+  { key: 'localTrend', title: '片段趋势校验', detail: '结合片段前后趋势修正 5 / 9 混淆 · 性能影响极低' },
+  { key: 'fillShortGaps', title: '漏识别点填补', detail: '对最多两个连续 OCR 漏识别点进行线性插值 · 性能影响极低' },
+  { key: 'localMedian', title: '片段中值校验', detail: '通过最多五个数据点的窗口识别孤立异常值 · 性能影响低' },
+  { key: 'neighborAgreement', title: '端点趋势检查', detail: '片段两端的速度趋势分歧较大时不自动修正 · 性能影响极低' },
 ]
 
 export function SettingsPage({ settings, onChange, onReset }: Props) {
@@ -44,23 +44,23 @@ export function SettingsPage({ settings, onChange, onReset }: Props) {
         </div>
 
         <div className="panel settings-card threshold-settings">
-          <header><Gauge size={18} /><div><strong>阈值预设</strong><span>决定何时将速度视为异常</span></div></header>
+          <header><Gauge size={18} /><div><strong>校验阈值</strong><span>设置速度数据的有效范围与偏差容限</span></div></header>
           <div className="threshold-grid">
-            <label><span>最大速度 <small>KM/H</small></span><input type="number" min="100" max="999" value={settings.maxSpeed} onChange={(event) => number('maxSpeed', Number(event.target.value))} /></label>
-            <label><span>相邻帧最大变化 <small>KM/H / 帧</small></span><input type="number" min="1" value={settings.maxSpeedChangePerFrame} onChange={(event) => number('maxSpeedChangePerFrame', Number(event.target.value))} /></label>
-            <label><span>局部偏差 <small>KM/H</small></span><input type="number" min="1" value={settings.localDeviation} onChange={(event) => number('localDeviation', Number(event.target.value))} /></label>
+            <label><span>速度阈值 <small>KM/H</small></span><input type="number" min="100" max="999" value={settings.maxSpeed} onChange={(event) => number('maxSpeed', Number(event.target.value))} /></label>
+            <label><span>相邻帧最大偏差校验 <small>KM/H / 帧</small></span><input type="number" min="1" value={settings.maxSpeedChangePerFrame} onChange={(event) => number('maxSpeedChangePerFrame', Number(event.target.value))} /></label>
+            <label><span>片段偏差容限 <small>KM/H</small></span><input type="number" min="1" value={settings.localDeviation} onChange={(event) => number('localDeviation', Number(event.target.value))} /></label>
           </div>
-          <p className="threshold-help"><strong>局部偏差</strong>是邻域判断容差：超过它的孤立值更容易被标记，但 5 / 9 候选必须落入该范围，两端差异超过它时也会触发保护。调小会提高孤立极值敏感度，同时更严格地拒绝不确定修正；建议先使用 18。</p>
+          <p className="threshold-help"><strong>片段偏差容限</strong>是片段校验的允许误差：超过它的孤立值更容易被标记，但 5 / 9 候选必须落入该范围，端点差异超过它时也会停止自动修正。调小会提高孤立异常值的敏感度，同时更严格地拒绝不确定修正；建议先使用 18。</p>
         </div>
 
         <div className="panel settings-card checks-settings">
-          <header><Sparkles size={18} /><div><strong>分析步骤</strong><span>所有自动修正都会保留原始值并在复查页标注</span></div></header>
+          <header><Sparkles size={18} /><div><strong>数据校验项</strong><span>默认全部关闭；启用后的自动修正会保留原始值并在复查页标注</span></div></header>
           <div className="check-grid">
             {CHECKS.map((item) => <button key={item.key} className={settings.checks[item.key] ? 'enabled' : ''} onClick={() => toggle(item.key)}><i>{settings.checks[item.key] ? '✓' : ''}</i><span><strong>{item.title}</strong><small>{item.detail}</small></span></button>)}
           </div>
         </div>
       </section>
-      <button className="settings-reset" onClick={onReset}><RotateCcw size={15} />恢复推荐设置</button>
+      <button className="settings-reset" onClick={onReset}><RotateCcw size={15} />恢复默认设置</button>
     </main>
   )
 }

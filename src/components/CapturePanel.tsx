@@ -1,4 +1,4 @@
-import { Bot, Camera, Crosshair, LoaderCircle, Sparkles, WandSparkles } from 'lucide-react'
+import { Bot, Camera, Check, Crosshair, LoaderCircle, Sparkles, WandSparkles } from 'lucide-react'
 
 interface Props {
   frameInterval: number
@@ -13,12 +13,18 @@ interface Props {
   scanRunning: boolean
   progress: string
   disabled: boolean
+  currentSpeed: string
+  currentGameTime: string
+  currentResult: { videoTime: number; confidence: number; engine: string } | null
   onFrameInterval: (value: number) => void
   onScope: (value: 'full' | 'range') => void
   onRangeStart: (value: number) => void
   onRangeEnd: (value: number) => void
   onUseCurrent: (edge: 'start' | 'end') => void
   onOcrCurrent: () => void
+  onCurrentSpeed: (value: string) => void
+  onCurrentGameTime: (value: string) => void
+  onAddCurrent: () => void
   onAutoLocate: () => void
   onAutoScan: () => void
 }
@@ -50,6 +56,13 @@ export function CapturePanel(props: Props) {
           <label>每<input type="number" min="1" max="600" step="1" value={props.frameInterval} onChange={(e) => { const value = Number(e.target.value); props.onFrameInterval(Number.isFinite(value) ? Math.max(1, Math.round(value)) : 1) }} /><span>帧采样</span></label>
           <button className={props.scanRunning ? 'stop' : ''} disabled={props.disabled || (props.busy && !props.scanRunning)} onClick={props.onAutoScan}><Bot size={17} />{props.scanRunning ? '停止分析' : '开始分析'}</button>
         </div>
+        {props.currentResult && <div className="current-frame-result">
+          <div className="current-result-heading"><span>当前帧识别结果</span><em>{props.currentResult.videoTime.toFixed(3)}s · {props.currentResult.engine} · {Math.round(props.currentResult.confidence)}%</em></div>
+          <label><span>速度</span><div><input inputMode="numeric" value={props.currentSpeed} onChange={(event) => props.onCurrentSpeed(event.target.value.replace(/\D/g, '').slice(0, 3))} /><small>km/h</small></div></label>
+          <label><span>局内时间</span><input inputMode="decimal" value={props.currentGameTime} onChange={(event) => props.onCurrentGameTime(event.target.value)} placeholder="00:00.000" /></label>
+          <button className="add-current-result" disabled={props.busy} onClick={props.onAddCurrent}><Check size={15} />手动确认并添加</button>
+          <p>可直接修正上方识别值；添加后作为人工真值永久锁定。</p>
+        </div>}
         <div className="fps-note">视频帧率：{props.frameRate ? `${props.frameRate.toFixed(2)} FPS` : '分析开始时自动检测'} · 预计采样间隔 {props.frameRate ? (props.frameInterval / props.frameRate).toFixed(3) : '—'} 秒</div>
         <div className={`capture-progress ${props.busy ? 'active' : ''}`}><Sparkles size={14} /><span>{props.progress || '先在放大预览中确认两个 ROI 只包含数字，再开始自动分析'}</span></div>
       </div>

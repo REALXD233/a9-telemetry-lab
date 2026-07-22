@@ -8,18 +8,15 @@ interface Props {
 }
 
 const CHECKS: { key: keyof SpeedCheckSettings; title: string; detail: string }[] = [
-  { key: 'threeDigitRule', title: '三位数规则', detail: '相邻值均超过 100 时，检查漏掉百位的结果' },
-  { key: 'speedJump', title: '速度跳变检查', detail: '限制单位时间内不合理的速度变化' },
-  { key: 'localTrend', title: '局部趋势检查', detail: '结合前后趋势修正 5 / 9 等数字混淆' },
-  { key: 'fillShortGaps', title: '填补短暂空缺', detail: '对最多连续两次 OCR 漏检做线性插值' },
-  { key: 'localMedian', title: '局部中位数检查', detail: '用五点窗口发现孤立的极高或极低值' },
-  { key: 'accelerationSpike', title: '加速度突变检查', detail: '检查相邻加速度方向或幅度的异常变化' },
-  { key: 'detectCuts', title: '检测视频剪辑点', detail: '遇到长间隔或明显断点时不跨段修正' },
-  { key: 'neighborAgreement', title: '两端一致性保护', detail: '仅当前后数据趋势足够一致时自动修改' },
+  { key: 'speedJump', title: '相邻帧速度变化限制', detail: '当前点与前后采样帧都超过阈值时，按两侧趋势修正 · 性能影响极低' },
+  { key: 'localTrend', title: '局部趋势检查', detail: '结合前后趋势修正 5 / 9 混淆 · 性能影响极低' },
+  { key: 'fillShortGaps', title: '填补短暂空缺', detail: '对最多连续两次 OCR 漏检做线性插值 · 性能影响极低' },
+  { key: 'localMedian', title: '局部中位数检查', detail: '用最多五点窗口发现孤立极值 · 性能影响低' },
+  { key: 'neighborAgreement', title: '两端一致性保护', detail: '前后趋势分歧较大时不自动修改 · 性能影响极低' },
 ]
 
 export function SettingsPage({ settings, onChange, onReset }: Props) {
-  const number = (key: 'maxSpeed' | 'maxSpeedChangePerSecond' | 'localDeviation' | 'accelerationThreshold', value: number) => {
+  const number = (key: 'maxSpeed' | 'maxSpeedChangePerFrame' | 'localDeviation', value: number) => {
     onChange({ ...settings, [key]: Number.isFinite(value) ? Math.max(0, value) : 0 })
   }
   const toggle = (key: keyof SpeedCheckSettings) => {
@@ -50,10 +47,10 @@ export function SettingsPage({ settings, onChange, onReset }: Props) {
           <header><Gauge size={18} /><div><strong>阈值预设</strong><span>决定何时将速度视为异常</span></div></header>
           <div className="threshold-grid">
             <label><span>最大速度 <small>KM/H</small></span><input type="number" min="100" max="999" value={settings.maxSpeed} onChange={(event) => number('maxSpeed', Number(event.target.value))} /></label>
-            <label><span>最大速度变化 / 秒</span><input type="number" min="1" value={settings.maxSpeedChangePerSecond} onChange={(event) => number('maxSpeedChangePerSecond', Number(event.target.value))} /></label>
+            <label><span>相邻帧最大变化 <small>KM/H / 帧</small></span><input type="number" min="1" value={settings.maxSpeedChangePerFrame} onChange={(event) => number('maxSpeedChangePerFrame', Number(event.target.value))} /></label>
             <label><span>局部偏差 <small>KM/H</small></span><input type="number" min="1" value={settings.localDeviation} onChange={(event) => number('localDeviation', Number(event.target.value))} /></label>
-            <label><span>加速度突变阈值</span><input type="number" min="1" value={settings.accelerationThreshold} onChange={(event) => number('accelerationThreshold', Number(event.target.value))} /></label>
           </div>
+          <p className="threshold-help"><strong>局部偏差</strong>是 OCR 值偏离邻域插值或中位数后，允许保留的最大误差。数值越小，修正越积极；数值越大，越倾向保留 OCR 原值。</p>
         </div>
 
         <div className="panel settings-card checks-settings">

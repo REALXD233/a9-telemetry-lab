@@ -1,6 +1,6 @@
 import { Download, FileSpreadsheet, FileText, Pencil, Trash2 } from 'lucide-react'
 import { hasRawDifference, rawValues } from '../lib/telemetryValues'
-import type { DataPreference, TelemetryPoint } from '../types'
+import type { DataDisplayMode, DataPreference, TelemetryPoint } from '../types'
 
 interface Props {
   points: TelemetryPoint[]
@@ -8,6 +8,8 @@ interface Props {
   onSelect: (id: string) => void
   onDelete: (id: string) => void
   onClear: () => void
+  displayMode: DataDisplayMode
+  onDisplayMode: (value: DataDisplayMode) => void
   exportName: string
   onExportName: (value: string) => void
   exportPreference: DataPreference
@@ -16,7 +18,7 @@ interface Props {
   onExportXlsx: () => void
 }
 
-export function DataPanel({ points, selectedId, onSelect, onDelete, onClear, exportName, onExportName, exportPreference, onExportPreference, onExportCsv, onExportXlsx }: Props) {
+export function DataPanel({ points, selectedId, onSelect, onDelete, onClear, displayMode, onDisplayMode, exportName, onExportName, exportPreference, onExportPreference, onExportCsv, onExportXlsx }: Props) {
   const max = points.length ? Math.max(...points.map((point) => point.speed)) : 0
   const average = points.length ? Math.round(points.reduce((sum, point) => sum + point.speed, 0) / points.length) : 0
   return (
@@ -27,6 +29,11 @@ export function DataPanel({ points, selectedId, onSelect, onDelete, onClear, exp
         <div><span>平均速度</span><strong>{average}<small> km/h</small></strong></div>
       </div>
       <div className="data-heading"><div><span className="eyebrow">EXTRACTED LOG</span><h2>采集记录</h2></div><button disabled={!points.length} onClick={onClear}>清空</button></div>
+      <div className="data-display-switch" role="group" aria-label="数据记录显示模式">
+        <button className={displayMode === 'both' ? 'active' : ''} onClick={() => onDisplayMode('both')}>同时显示</button>
+        <button className={displayMode === 'raw' ? 'active' : ''} onClick={() => onDisplayMode('raw')}>仅原始 OCR</button>
+        <button className={displayMode === 'corrected' ? 'active' : ''} onClick={() => onDisplayMode('corrected')}>仅修正后</button>
+      </div>
       <div className="record-list">
         {!points.length ? (
           <div className="record-empty">暂无记录<br /><span>使用下方采集工具添加第一条数据</span></div>
@@ -37,8 +44,8 @@ export function DataPanel({ points, selectedId, onSelect, onDelete, onClear, exp
           <article key={point.id} className={selectedId === point.id ? 'selected' : ''} onClick={() => onSelect(point.id)}>
             <div className="record-index"><span>#{String(index + 1).padStart(3, '0')}</span><em>{point.source}{point.locked || point.source === '手动' ? ' · 已锁定' : ''}{point.confidence != null ? ` · ${Math.round(point.confidence)}%` : ''}{point.corrected ? ' · 时间已修正' : ''}{point.speedCorrected ? ` · ${point.speedCorrectionReason ?? '速度已修正'}` : ''}</em></div>
             <div className="record-values">
-              <span><em>修正后</em><strong>{point.speed}<small> km/h</small></strong><time>{point.gameTime}</time></span>
-              <span className={differs ? 'raw differs' : 'raw'}><em>原始 OCR</em><strong>{raw.speed}<small> km/h</small></strong><time>{raw.gameTime}</time></span>
+              {displayMode !== 'raw' && <span className={displayMode === 'corrected' ? 'single' : ''}><em>修正后</em><strong>{point.speed}<small> km/h</small></strong><time>{point.gameTime}</time></span>}
+              {displayMode !== 'corrected' && <span className={`${differs ? 'raw differs' : 'raw'} ${displayMode === 'raw' ? 'single' : ''}`}><em>原始 OCR</em><strong>{raw.speed}<small> km/h</small></strong><time>{raw.gameTime}</time></span>}
             </div>
             <button className="record-edit" aria-label="选择并编辑"><Pencil size={14} /></button>
             <button className="record-delete" aria-label="删除记录" onClick={(event) => { event.stopPropagation(); onDelete(point.id) }}><Trash2 size={14} /></button>

@@ -1,19 +1,20 @@
 import { Check, LockKeyhole, Plus, X } from 'lucide-react'
 import { hasRawDifference, rawValues } from '../lib/telemetryValues'
-import type { TelemetryPoint } from '../types'
+import type { DataDisplayMode, TelemetryPoint } from '../types'
 
 interface Props {
   speed: string
   gameTime: string
   selected: TelemetryPoint | null
   disabled: boolean
+  displayMode: DataDisplayMode
   onSpeed: (value: string) => void
   onGameTime: (value: string) => void
   onSave: () => void
   onCancel: () => void
 }
 
-export function ReviewForm({ speed, gameTime, selected, disabled, onSpeed, onGameTime, onSave, onCancel }: Props) {
+export function ReviewForm({ speed, gameTime, selected, disabled, displayMode, onSpeed, onGameTime, onSave, onCancel }: Props) {
   const raw = selected ? rawValues(selected) : null
   return (
     <section className="panel review-form">
@@ -23,10 +24,10 @@ export function ReviewForm({ speed, gameTime, selected, disabled, onSpeed, onGam
       </header>
       <div className="review-form-body">
         <p>{selected ? `正在编辑视频 ${selected.videoTime.toFixed(3)}s 处的数据。保存后，自动识别与异常修正不会覆盖它。` : '逐帧定位后输入正确数据；人工真值可作为后续时间与速度修正的可靠锚点。'}</p>
-        {selected && raw && <div className={`review-comparison ${hasRawDifference(selected) ? 'differs' : ''}`}>
-          <span><small>OCR 原始</small><strong>{raw.speed} km/h</strong><time>{raw.gameTime}</time></span>
-          <i>→</i>
-          <span><small>当前修正</small><strong>{selected.speed} km/h</strong><time>{selected.gameTime}</time></span>
+        {selected && raw && <div className={`review-comparison mode-${displayMode} ${hasRawDifference(selected) ? 'differs' : ''}`}>
+          {displayMode !== 'corrected' && <span><small>OCR 原始</small><strong>{raw.speed} km/h</strong><time>{raw.gameTime}</time></span>}
+          {displayMode === 'both' && <i>→</i>}
+          {displayMode !== 'raw' && <span><small>当前修正</small><strong>{selected.speed} km/h</strong><time>{selected.gameTime}</time></span>}
         </div>}
         <div className="field-group"><label htmlFor="review-speed">速度 <span>KM/H</span></label><div><input id="review-speed" inputMode="numeric" placeholder="—" value={speed} onChange={(event) => onSpeed(event.target.value.replace(/\D/g, '').slice(0, 3))} /><small>km/h</small></div></div>
         <div className="field-group"><label htmlFor="review-time">局内时间 <span>单调递增</span></label><div><input id="review-time" inputMode="decimal" placeholder="00:00.000" value={gameTime} onChange={(event) => onGameTime(event.target.value)} /></div></div>

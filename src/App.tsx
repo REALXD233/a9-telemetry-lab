@@ -15,7 +15,7 @@ import { repairCapturedTimes, type RawTelemetryCapture } from './lib/timeRepair'
 import { transcodeToBrowserMp4 } from './lib/videoCompat'
 import { correctSpeedOutliers } from './lib/speedChecks'
 import { DEFAULT_RECOGNITION_SETTINGS, loadRecognitionSettings, saveRecognitionSettings } from './lib/settings'
-import type { CropRegion, DataPreference, OcrResult, RecognitionSettings, RegionKind, TelemetryPoint } from './types'
+import type { CropRegion, DataDisplayMode, DataPreference, OcrResult, RecognitionSettings, RegionKind, TelemetryPoint } from './types'
 
 type Page = 'extract' | 'review' | 'settings' | 'compare' | 'guide'
 type CurrentFrameRecognition = { videoTime: number; rawSpeed: string; rawGameTime: string; confidence: number; engine: string }
@@ -59,6 +59,7 @@ export default function App() {
   const [videoProcessing, setVideoProcessing] = useState('')
   const [exportName, setExportName] = useState('A9_速度分析')
   const [exportPreference, setExportPreference] = useState<DataPreference>('corrected')
+  const [displayMode, setDisplayMode] = useState<DataDisplayMode>('both')
   const [settings, setSettings] = useState<RecognitionSettings>(() => loadRecognitionSettings())
   const [page, setPage] = useState<Page>(() => pageFromHash())
   const selected = useMemo(() => points.find((point) => point.id === selectedId) ?? null, [points, selectedId])
@@ -403,7 +404,7 @@ export default function App() {
   }
   const baseName = fileName.replace(/\.[^.]+$/, '') || 'A9_速度分析'
   const workspace = <VideoWorkspace ref={workspaceRef} source={source} fileName={fileName} regions={regions} activeRegion={activeRegion} onActiveRegion={setActiveRegion} onRegionChange={updateRegion} onFile={loadFile} onVideoMetadata={handleVideoMetadata} onVideoPlayable={handleVideoPlayable} onVideoError={handleVideoError} onFrameChange={refreshPreviews} frameRate={frameRate} processingMessage={videoProcessing} />
-  const dataPanel = <DataPanel points={points} selectedId={selectedId} onSelect={selectPoint} onDelete={(id) => { setPoints((current) => current.filter((item) => item.id !== id)); if (selectedId === id) setSelectedId(null) }} onClear={() => { setPoints([]); setSelectedId(null) }} exportName={exportName} onExportName={setExportName} exportPreference={exportPreference} onExportPreference={setExportPreference} onExportCsv={() => void exportCsv(points, exportName || baseName, exportPreference)} onExportXlsx={() => void exportXlsx(points, exportName || baseName, exportPreference)} />
+  const dataPanel = <DataPanel points={points} selectedId={selectedId} onSelect={selectPoint} onDelete={(id) => { setPoints((current) => current.filter((item) => item.id !== id)); if (selectedId === id) setSelectedId(null) }} onClear={() => { setPoints([]); setSelectedId(null) }} displayMode={displayMode} onDisplayMode={setDisplayMode} exportName={exportName} onExportName={setExportName} exportPreference={exportPreference} onExportPreference={setExportPreference} onExportCsv={() => void exportCsv(points, exportName || baseName, exportPreference)} onExportXlsx={() => void exportXlsx(points, exportName || baseName, exportPreference)} />
 
   return (
     <div className="app-shell">
@@ -416,21 +417,21 @@ export default function App() {
           <button title="识别设置" className={page === 'settings' ? 'active' : ''} disabled={busy} onClick={() => navigate('settings')}><Settings2 size={16} />识别设置</button>
           <button title="数据对比" className={page === 'compare' ? 'active' : ''} disabled={busy} onClick={() => navigate('compare')}><BarChart3 size={16} />数据对比</button>
           <button title="使用指南" className={page === 'guide' ? 'active' : ''} disabled={busy} onClick={() => navigate('guide')}><CircleHelp size={16} />使用指南</button>
-          <span className="version">BUILD 1.7.0</span>
+          <span className="version">BUILD 1.7.1</span>
         </nav>
       </header>
       {page === 'extract' ? <main className="extract-main">
         <div className="workspace-column">
           {workspace}
-          <TelemetryChart points={points} />
+          <TelemetryChart points={points} displayMode={displayMode} onDisplayMode={setDisplayMode} />
         </div>
         <div className="control-column">
           <CapturePanel frameInterval={frameInterval} frameRate={frameRate} scope={scope} rangeStart={rangeStart} rangeEnd={rangeEnd} duration={duration} previewSpeed={previewSpeed} previewTimer={previewTimer} busy={busy} scanRunning={scanRunning} progress={progress} disabled={!videoUsable} currentSpeed={currentSpeed} currentGameTime={currentGameTime} currentResult={currentRecognition} onFrameInterval={setFrameInterval} onScope={setScope} onRangeStart={setRangeStart} onRangeEnd={setRangeEnd} onUseCurrent={useCurrentEdge} onOcrCurrent={ocrCurrent} onCurrentSpeed={setCurrentSpeed} onCurrentGameTime={setCurrentGameTime} onAddCurrent={addCurrentRecognition} onAutoLocate={autoLocate} onAutoScan={autoScan} />
           <section className="panel extraction-summary"><span className="eyebrow">NEXT STEP</span><strong>{points.length} 条数据等待复查</strong><p>完成提取后前往“复查编辑”。点击记录会自动跳到对应视频帧，人工保存的数据将永久锁定。</p><button disabled={!points.length} onClick={() => navigate('review')}>进入复查编辑</button></section>
         </div>
       </main> : page === 'review' ? <main className="review-main">
-        <div className="workspace-column">{workspace}<TelemetryChart points={points} /></div>
-        <div className="control-column"><ReviewForm speed={speed} gameTime={gameTime} selected={selected} disabled={!videoUsable} onSpeed={setSpeed} onGameTime={setGameTime} onSave={savePoint} onCancel={() => { setSelectedId(null); setSpeed(''); setGameTime('') }} />{dataPanel}</div>
+        <div className="workspace-column">{workspace}<TelemetryChart points={points} displayMode={displayMode} onDisplayMode={setDisplayMode} /></div>
+        <div className="control-column"><ReviewForm speed={speed} gameTime={gameTime} selected={selected} disabled={!videoUsable} displayMode={displayMode} onSpeed={setSpeed} onGameTime={setGameTime} onSave={savePoint} onCancel={() => { setSelectedId(null); setSpeed(''); setGameTime('') }} />{dataPanel}</div>
       </main> : page === 'settings' ? <SettingsPage settings={settings} onChange={updateSettings} onReset={() => updateSettings(DEFAULT_RECOGNITION_SETTINGS)} /> : page === 'compare' ? <ComparisonPage /> : <GuidePage />}
       <footer><span><i />系统就绪</span><span><Cpu size={13} />浏览器本地计算</span><span><Database size={13} />数据不会上传服务器</span>{(page === 'extract' || page === 'review') && <button onClick={() => setRegions(DEFAULT_REGIONS)}><RotateCcw size={13} />重置框选</button>}<a href="https://github.com/REALXD233/a9-telemetry-lab" target="_blank" rel="noreferrer"><GitBranch size={13} />项目源码</a></footer>
     </div>

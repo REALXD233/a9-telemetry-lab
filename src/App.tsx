@@ -417,7 +417,7 @@ export default function App() {
           <button title="识别设置" className={page === 'settings' ? 'active' : ''} disabled={busy} onClick={() => navigate('settings')}><Settings2 size={16} />识别设置</button>
           <button title="数据对比" className={page === 'compare' ? 'active' : ''} disabled={busy} onClick={() => navigate('compare')}><BarChart3 size={16} />数据对比</button>
           <button title="使用指南" className={page === 'guide' ? 'active' : ''} disabled={busy} onClick={() => navigate('guide')}><CircleHelp size={16} />使用指南</button>
-          <span className="version">BUILD 1.7.1</span>
+          <span className="version">BUILD 1.7.2</span>
         </nav>
       </header>
       {page === 'extract' ? <main className="extract-main">

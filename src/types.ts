@@ -1,6 +1,7 @@
 export type RegionKind = 'speed' | 'timer'
 export type RecognitionModel = 'default' | 'a9-cn'
 export type DataPreference = 'corrected' | 'raw'
+export type DataDisplayMode = 'both' | DataPreference
 
 export interface SpeedCheckSettings {
   speedJump: boolean
